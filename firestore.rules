@@ -1,0 +1,215 @@
+rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+
+    // ── Helpers ──────────────────────────────────────────────────────────
+    function isSignedIn() {
+      return request.auth != null;
+    }
+    function isOwner(uid) {
+      return isSignedIn() && request.auth.uid == uid;
+    }
+    function isAdmin() {
+      return isSignedIn()
+        && exists(/databases/$(database)/documents/admins/$(request.auth.uid));
+    }
+
+    // ── Admins allowlist ────────────────────────────────────────────────
+    // Only admins can read this collection (so users can't enumerate admin
+    // UIDs). Writes are manual via the Firestore Console for now.
+    match /admins/{uid} {
+      allow read: if isAdmin();
+      allow write: if false;
+    }
+
+    // ── Users ────────────────────────────────────────────────────────────
+    match /users/{uid} {
+      allow read: if true;
+      allow create: if isOwner(uid);
+      allow update: if isOwner(uid)
+        && request.resource.data.referralCode == resource.data.referralCode
+        && request.resource.data.sponsorCode == resource.data.sponsorCode
+        && request.resource.data.sponsorUid == resource.data.sponsorUid
+        || isAdmin();
+      allow delete: if isAdmin();
+
+      match /favourites/{propertyId} {
+        allow read, write: if isOwner(uid) || isAdmin();
+      }
+    }
+
+    // ── Wallets ─────────────────────────────────────────────────────────
+    match /wallets/{uid} {
+      allow read: if isSignedIn() || isAdmin();
+      allow write: if isSignedIn() || isAdmin();
+    }
+
+    // ── Transactions ────────────────────────────────────────────────────
+    match /transactions/{txId} {
+      allow read: if (isSignedIn() && resource.data.uid == request.auth.uid) || isAdmin();
+      allow create: if isSignedIn();
+      allow update, delete: if isAdmin();
+    }
+
+    // ── Bank Accounts ───────────────────────────────────────────────────
+    match /bank_accounts/{accountId} {
+      allow read, delete, update: if (isSignedIn() && resource.data.uid == request.auth.uid) || isAdmin();
+      allow create: if (isSignedIn() && request.resource.data.uid == request.auth.uid) || isAdmin();
+    }
+
+    // ── Withdrawal Requests ─────────────────────────────────────────────
+    match /withdrawal_requests/{reqId} {
+      allow read: if (isSignedIn() && resource.data.uid == request.auth.uid) || isAdmin();
+      allow create: if (isSignedIn() && request.resource.data.uid == request.auth.uid);
+      allow update, delete: if isAdmin();
+    }
+
+    // ── Properties ──────────────────────────────────────────────────────
+    match /properties/{propertyId} {
+      allow read: if isSignedIn();
+      allow create: if isSignedIn()
+        && request.resource.data.ownerUid == request.auth.uid
+        && request.resource.data.status == 'pending'
+        || isAdmin();
+      allow update: if (isSignedIn() && (
+        (resource.data.ownerUid == request.auth.uid
+          && resource.data.status in ['pending', 'rejected'])
+        || request.resource.data.status == 'sold'
+      )) || isAdmin();
+      allow delete: if (isSignedIn()
+        && resource.data.ownerUid == request.auth.uid
+        && resource.data.status in ['pending', 'rejected']) || isAdmin();
+    }
+
+    // ── Property-related requests ───────────────────────────────────────
+    match /inspection_requests/{id} {
+      allow read: if (isSignedIn() && resource.data.uid == request.auth.uid) || isAdmin();
+      allow create: if isSignedIn() && request.resource.data.uid == request.auth.uid;
+      allow update, delete: if isAdmin();
+    }
+    match /lease_requests/{id} {
+      allow read: if (isSignedIn() && resource.data.uid == request.auth.uid) || isAdmin();
+      allow create: if isSignedIn() && request.resource.data.uid == request.auth.uid;
+      allow update, delete: if isAdmin();
+    }
+    match /rental_requests/{id} {
+      allow read: if (isSignedIn() && resource.data.uid == request.auth.uid) || isAdmin();
+      allow create: if isSignedIn() && request.resource.data.uid == request.auth.uid;
+      allow update, delete: if isAdmin();
+    }
+    match /management_requests/{id} {
+      allow read: if (isSignedIn() && resource.data.uid == request.auth.uid) || isAdmin();
+      allow create: if isSignedIn() && request.resource.data.uid == request.auth.uid;
+      allow update, delete: if isAdmin();
+    }
+    match /property_purchases/{id} {
+      allow read: if isSignedIn() && (
+        resource.data.buyerUid == request.auth.uid
+        || resource.data.sellerUid == request.auth.uid
+        || resource.data.referrerUid == request.auth.uid
+      ) || isAdmin();
+      allow create: if isSignedIn();
+      allow update, delete: if isAdmin();
+    }
+
+    // ── IOU ─────────────────────────────────────────────────────────────
+    match /iou_applications/{id} {
+      allow read: if (isSignedIn() && resource.data.uid == request.auth.uid) || isAdmin();
+      allow create: if isSignedIn() && request.resource.data.uid == request.auth.uid;
+      allow update, delete: if isAdmin();
+    }
+
+    // ── Investments ─────────────────────────────────────────────────────
+    match /investments/{id} {
+      allow read: if isSignedIn();
+      allow write: if isAdmin() || isSignedIn();
+    }
+    match /investment_participations/{id} {
+      allow read: if (isSignedIn() && resource.data.uid == request.auth.uid) || isAdmin();
+      allow create: if isSignedIn() && request.resource.data.uid == request.auth.uid;
+      allow update, delete: if isAdmin();
+    }
+
+    // ── Build projects ──────────────────────────────────────────────────
+    match /build_projects/{id} {
+      allow read: if isSignedIn();
+      allow create: if (isSignedIn()
+        && request.resource.data.uploadedBy == request.auth.uid
+        && request.resource.data.status == 'pending') || isAdmin();
+      allow update: if isSignedIn() || isAdmin();
+      allow delete: if isAdmin();
+    }
+    match /build_participations/{id} {
+      allow read: if (isSignedIn() && resource.data.uid == request.auth.uid) || isAdmin();
+      allow create: if isSignedIn() && request.resource.data.uid == request.auth.uid;
+      allow update, delete: if isAdmin();
+    }
+    match /build_for_me_requests/{id} {
+      allow read: if (isSignedIn() && resource.data.uid == request.auth.uid) || isAdmin();
+      allow create: if isSignedIn() && request.resource.data.uid == request.auth.uid;
+      allow update, delete: if isAdmin();
+    }
+
+    // ── JV ──────────────────────────────────────────────────────────────
+    match /jv_projects/{id} {
+      allow read: if (isSignedIn() && resource.data.uid == request.auth.uid) || isAdmin();
+      allow create: if isSignedIn() && request.resource.data.uid == request.auth.uid;
+      allow update, delete: if isAdmin();
+    }
+
+    // ── Lands ───────────────────────────────────────────────────────────
+    match /lands/{id} {
+      allow read: if isSignedIn();
+      allow update: if isSignedIn() || isAdmin();
+      allow create, delete: if isAdmin();
+    }
+    match /land_acquisitions/{id} {
+      allow read: if (isSignedIn() && resource.data.uid == request.auth.uid) || isAdmin();
+      allow create: if isSignedIn() && request.resource.data.uid == request.auth.uid;
+      allow update, delete: if isAdmin();
+    }
+
+    // ── Legacy plans ────────────────────────────────────────────────────
+    match /legacy_plans/{id} {
+      allow read: if (isSignedIn() && resource.data.uid == request.auth.uid) || isAdmin();
+      allow create: if isSignedIn() && request.resource.data.uid == request.auth.uid;
+      allow update: if isSignedIn() || isAdmin();
+      allow delete: if isAdmin();
+    }
+
+    // ── Marketplace ─────────────────────────────────────────────────────
+    match /vendors/{id} {
+      allow read: if isSignedIn();
+      allow write: if isAdmin();
+    }
+    match /products/{id} {
+      allow read: if isSignedIn();
+      allow write: if isAdmin();
+    }
+    match /orders/{id} {
+      allow read: if (isSignedIn() && resource.data.uid == request.auth.uid) || isAdmin();
+      allow create: if isSignedIn() && request.resource.data.uid == request.auth.uid;
+      allow update, delete: if isAdmin();
+    }
+
+    // ── Referrals & Sponsorships ────────────────────────────────────────
+    match /referrals/{id} {
+      allow read: if (isSignedIn() && resource.data.referrerUid == request.auth.uid) || isAdmin();
+      allow write: if isSignedIn() || isAdmin();
+    }
+    match /sponsorships/{id} {
+      allow read: if isSignedIn() && (
+        resource.data.sponsorUid == request.auth.uid
+        || resource.data.sponsoredUid == request.auth.uid
+      ) || isAdmin();
+      allow create: if isSignedIn();
+      allow update, delete: if isAdmin();
+    }
+
+    // ── Config (read-only) ──────────────────────────────────────────────
+    match /config/{id} {
+      allow read: if true;
+      allow write: if isAdmin();
+    }
+  }
+}
