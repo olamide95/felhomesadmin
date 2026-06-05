@@ -49,8 +49,8 @@ type IouDoc = {
   termYears?: number;
   repaymentMode?: string;
   status?: string;
-  createdAt?: unknown;
-  approvedAt?: unknown;
+  createdAt?: any;
+  approvedAt?: any;
   rejectionReason?: string;
 };
 

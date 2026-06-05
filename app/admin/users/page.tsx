@@ -31,7 +31,7 @@ type UserDoc = {
   kycCompleted?: boolean;
   registrationFeePaid?: boolean;
   suspended?: boolean;
-  createdAt?: unknown;
+  createdAt?: any;
 };
 
 export default function UsersPage() {

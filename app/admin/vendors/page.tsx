@@ -40,7 +40,7 @@ type VendorDoc = {
   logoUrl?: string;
   coverUrl?: string;
   tags?: string[];
-  createdAt?: unknown;
+  createdAt?: any;
 };
 
 export default function VendorsPage() {

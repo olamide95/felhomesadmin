@@ -50,8 +50,8 @@ type WithdrawalDoc = {
   accountNumber?: string;
   accountName?: string;
   status?: string;
-  createdAt?: unknown;
-  processedAt?: unknown;
+  createdAt?: any;
+  processedAt?: any;
   payoutReference?: string;
   rejectionReason?: string;
 };

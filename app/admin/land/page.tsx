@@ -39,7 +39,7 @@ type LandDoc = {
   status?: string;
   imageUrls?: string[];
   documentUrls?: string[];
-  createdAt?: unknown;
+  createdAt?: any;
 };
 
 export default function LandPage() {

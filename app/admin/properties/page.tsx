@@ -48,8 +48,8 @@ type PropertyDoc = {
   bathrooms?: number;
   sizeSqm?: number;
   annualRent?: number;
-  createdAt?: unknown;
-  approvedAt?: unknown;
+  createdAt?: any;
+  approvedAt?: any;
   rejectionReason?: string;
 };
 

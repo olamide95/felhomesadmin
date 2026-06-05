@@ -42,7 +42,7 @@ type InvestmentDoc = {
   projectedRoi?: number;
   status?: string;
   imageUrls?: string[];
-  createdAt?: unknown;
+  createdAt?: any;
 };
 
 export default function InvestmentsPage() {

@@ -36,7 +36,7 @@ type JvDoc = {
   imageUrls?: string[];
   documentUrls?: string[];
   partnership?: string;
-  createdAt?: unknown;
+  createdAt?: any;
   rejectionReason?: string;
   adminNotes?: string;
 };
