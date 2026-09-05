@@ -22,6 +22,9 @@ import {
 import { useAuth } from "@/lib/auth";
 import { cn } from "@/lib/utils";
 import { Button } from "@/components/ui/button";
+import { ReceiptText } from 'lucide-react';
+import { MessageCircle } from 'lucide-react';
+import {  Landmark } from 'lucide-react';
 
 const NAV = [
   { href: "/admin", label: "Dashboard", icon: LayoutDashboard },
@@ -35,6 +38,33 @@ const NAV = [
   { href: "/admin/vendors", label: "Vendors", icon: Store },
   { href: "/admin/products", label: "Products", icon: Package },
   { href: "/admin/users", label: "Users", icon: Users },
+  {
+  label: 'Payment Verifications',
+  href: '/admin/payment-verifications',
+  icon: ReceiptText,
+ 
+},
+{
+  label: 'Support',
+  href: '/admin/support',
+  icon: MessageCircle,
+  // Optional badge for pending unread threads:
+  // badge: unreadThreads > 0 ? String(unreadThreads) : undefined,
+},
+{
+  label: 'Rent-to-Own',
+  href: '/admin/rent-to-own',
+  icon: Handshake,
+  // Optional badge for pending applications count:
+  // badge: pendingRto > 0 ? String(pendingRto) : undefined,
+},
+{
+  label: 'Mortgages',
+  href: '/admin/mortgages',
+  icon: Landmark,
+  // Optional badge for in-progress applications count:
+  // badge: activeMortgages > 0 ? String(activeMortgages) : undefined,
+},
 ];
 
 export default function AdminLayout({ children }: { children: React.ReactNode }) {
@@ -146,3 +176,7 @@ export default function AdminLayout({ children }: { children: React.ReactNode })
     </div>
   );
 }
+function usePendingVerificationsCount(): any {
+  throw new Error("Function not implemented.");
+}
+
