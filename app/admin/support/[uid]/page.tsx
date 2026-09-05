@@ -8,13 +8,13 @@ import {
   collection,
   doc,
   getDoc,
+  increment,
   limitToLast,
   onSnapshot,
   orderBy,
   query,
-  ref as _unused,
   serverTimestamp,
-  updateDoc,
+  setDoc,
 } from 'firebase/firestore';
 import {
   ref as storageRef,
@@ -22,7 +22,8 @@ import {
   getDownloadURL,
 } from 'firebase/storage';
 import { db, auth, storage } from '@/lib/firebase';
-import { PageHeader } from '@/components/shared/page-header';
+import { PageHeader } from '@/components/page-header';
+import { ValidationWarningDialog } from '@/components/validation-warning-dialog';
 import { Card, CardContent } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
 import { Textarea } from '@/components/ui/textarea';
@@ -40,6 +41,8 @@ import {
   Image as ImageIcon,
   FileText,
 } from 'lucide-react';
+
+const MAX_ATTACHMENT_BYTES = 8 * 1024 * 1024;
 
 interface Message {
   id: string;
@@ -83,6 +86,9 @@ export default function SupportThreadDetailPage() {
   const [pendingFile, setPendingFile] = useState<File | null>(null);
   const [sending, setSending] = useState(false);
   const [copied, setCopied] = useState(false);
+  const [threadStatus, setThreadStatus] = useState<string | null>(null);
+  const [showCloseConfirm, setShowCloseConfirm] = useState(false);
+  const [closing, setClosing] = useState(false);
   const fileInputRef = useRef<HTMLInputElement>(null);
   const scrollRef = useRef<HTMLDivElement>(null);
 
@@ -120,6 +126,12 @@ export default function SupportThreadDetailPage() {
       }
     );
 
+    // Thread doc listener — keeps open/closed state live.
+    const unsubThread = onSnapshot(
+      doc(db, 'support_threads', uid),
+      (snap) => setThreadStatus((snap.data()?.status as string) ?? null)
+    );
+
     // Fetch user profile (one-shot).
     getDoc(doc(db, 'users', uid))
       .then((snap) => {
@@ -131,12 +143,18 @@ export default function SupportThreadDetailPage() {
       })
       .catch(() => setUserProfile({ uid }));
 
-    // Reset adminUnreadCount when we open the thread.
-    updateDoc(doc(db, 'support_threads', uid), {
-      adminUnreadCount: 0,
-    }).catch(() => {});
+    // Reset adminUnreadCount when we open the thread. merge:true so this
+    // still works if the thread doc hasn't been created yet.
+    setDoc(
+      doc(db, 'support_threads', uid),
+      { adminUnreadCount: 0 },
+      { merge: true }
+    ).catch(() => {});
 
-    return () => unsubMessages();
+    return () => {
+      unsubMessages();
+      unsubThread();
+    };
   }, [uid]);
 
   async function handleSend() {
@@ -156,23 +174,22 @@ export default function SupportThreadDetailPage() {
       let attachmentSize: number | undefined;
 
       if (pendingFile) {
-        if (pendingFile.size > 8 * 1024 * 1024) {
+        if (pendingFile.size > MAX_ATTACHMENT_BYTES) {
           throw new Error('File must be under 8 MB');
         }
         const stamp = Date.now();
-        const ext = pendingFile.name.split('.').pop()?.toLowerCase() || 'bin';
         const path = `support_attachments/${uid}/admin_${stamp}_${pendingFile.name}`;
-        const ref = storageRef(storage, path);
-        await uploadBytes(ref, pendingFile, {
+        const fileRef = storageRef(storage, path);
+        await uploadBytes(fileRef, pendingFile, {
           contentType: pendingFile.type,
         });
-        attachmentUrl = await getDownloadURL(ref);
+        attachmentUrl = await getDownloadURL(fileRef);
         attachmentName = pendingFile.name;
         attachmentType = pendingFile.type.startsWith('image/')
           ? 'image'
           : pendingFile.type === 'application/pdf'
-          ? 'pdf'
-          : 'other';
+            ? 'pdf'
+            : 'other';
         attachmentSize = pendingFile.size;
       }
 
@@ -180,8 +197,8 @@ export default function SupportThreadDetailPage() {
       const displayBody = body
         ? body
         : attachmentType === 'image'
-        ? '📷 Image'
-        : '📎 Attachment';
+          ? '📷 Image'
+          : '📎 Attachment';
 
       // Add the message.
       await addDoc(collection(db, 'support_threads', uid, 'messages'), {
@@ -198,20 +215,21 @@ export default function SupportThreadDetailPage() {
 
       // Update thread metadata + bump user unread. This ALSO fires the
       // onSupportMessageCreated Cloud Function which pushes to the user.
-      await updateDoc(doc(db, 'support_threads', uid), {
-        lastMessageBody:
-          displayBody.length > 140
-            ? `${displayBody.substring(0, 137)}...`
-            : displayBody,
-        lastMessageAt: serverTimestamp(),
-        lastMessageSender: 'admin',
-        userUnreadCount: (await getDoc(doc(db, 'support_threads', uid)))
-          .data()?.userUnreadCount
-          ? // increment
-            (((await getDoc(doc(db, 'support_threads', uid))).data()!
-              .userUnreadCount as number) + 1)
-          : 1,
-      });
+      // increment() is atomic — two admins replying at once won't clobber
+      // each other's count, and it needs no read.
+      await setDoc(
+        doc(db, 'support_threads', uid),
+        {
+          lastMessageBody:
+            displayBody.length > 140
+              ? `${displayBody.substring(0, 137)}...`
+              : displayBody,
+          lastMessageAt: serverTimestamp(),
+          lastMessageSender: 'admin',
+          userUnreadCount: increment(1),
+        },
+        { merge: true }
+      );
 
       setReply('');
       setPendingFile(null);
@@ -226,21 +244,33 @@ export default function SupportThreadDetailPage() {
 
   async function handleCloseThread() {
     if (!uid) return;
+    setClosing(true);
     try {
-      await updateDoc(doc(db, 'support_threads', uid), { status: 'closed' });
+      await setDoc(
+        doc(db, 'support_threads', uid),
+        { status: 'closed' },
+        { merge: true }
+      );
       toast.success('Thread closed.');
+      setShowCloseConfirm(false);
     } catch (e: any) {
-      toast.error(e.message);
+      toast.error(e.message ?? 'Failed to close thread.');
+    } finally {
+      setClosing(false);
     }
   }
 
   async function handleReopenThread() {
     if (!uid) return;
     try {
-      await updateDoc(doc(db, 'support_threads', uid), { status: 'open' });
+      await setDoc(
+        doc(db, 'support_threads', uid),
+        { status: 'open' },
+        { merge: true }
+      );
       toast.success('Thread reopened.');
     } catch (e: any) {
-      toast.error(e.message);
+      toast.error(e.message ?? 'Failed to reopen thread.');
     }
   }
 
@@ -258,6 +288,8 @@ export default function SupportThreadDetailPage() {
       </div>
     );
   }
+
+  const isClosed = threadStatus === 'closed';
 
   return (
     <div className="space-y-4">
@@ -286,9 +318,7 @@ export default function SupportThreadDetailPage() {
                   No messages yet.
                 </div>
               ) : (
-                messages.map((m) => (
-                  <MessageBubble key={m.id} message={m} />
-                ))
+                messages.map((m) => <MessageBubble key={m.id} message={m} />)
               )}
             </div>
 
@@ -309,8 +339,7 @@ export default function SupportThreadDetailPage() {
                     size="sm"
                     onClick={() => {
                       setPendingFile(null);
-                      if (fileInputRef.current)
-                        fileInputRef.current.value = '';
+                      if (fileInputRef.current) fileInputRef.current.value = '';
                     }}
                   >
                     <X className="h-4 w-4" />
@@ -325,7 +354,15 @@ export default function SupportThreadDetailPage() {
                   className="hidden"
                   onChange={(e) => {
                     const f = e.target.files?.[0];
-                    if (f) setPendingFile(f);
+                    if (!f) return;
+                    // Fail here rather than after the user has typed a reply
+                    // and hit send.
+                    if (f.size > MAX_ATTACHMENT_BYTES) {
+                      toast.error('File must be under 8 MB');
+                      e.target.value = '';
+                      return;
+                    }
+                    setPendingFile(f);
                   }}
                 />
                 <Button
@@ -356,7 +393,13 @@ export default function SupportThreadDetailPage() {
                   className="bg-amber-600 hover:bg-amber-700"
                 >
                   {sending ? (
-                    <Loader2 className="h-4 w-4 animate-spin" />
+                    <>
+                      <Loader2
+                        className="h-4 w-4 animate-spin"
+                        aria-hidden="true"
+                      />
+                      <span className="sr-only">Sending</span>
+                    </>
                   ) : (
                     <>
                       <Send className="h-4 w-4 mr-1" />
@@ -418,14 +461,14 @@ export default function SupportThreadDetailPage() {
                 {userProfile?.referralCode && (
                   <div className="flex items-center justify-between">
                     <span className="text-muted-foreground">Referral</span>
-                    <span className="font-mono">{userProfile.referralCode}</span>
+                    <span className="font-mono">
+                      {userProfile.referralCode}
+                    </span>
                   </div>
                 )}
                 <div className="flex items-center justify-between">
                   <span className="text-muted-foreground">Reg fee paid</span>
-                  <span>
-                    {userProfile?.registrationFeePaid ? '✅' : '❌'}
-                  </span>
+                  <span>{userProfile?.registrationFeePaid ? '✅' : '❌'}</span>
                 </div>
                 <div className="flex items-center justify-between">
                   <span className="text-muted-foreground">Account active</span>
@@ -452,26 +495,43 @@ export default function SupportThreadDetailPage() {
               >
                 View full user profile →
               </Link>
-              <Button
-                variant="outline"
-                size="sm"
-                className="w-full"
-                onClick={handleCloseThread}
-              >
-                Close thread
-              </Button>
-              <Button
-                variant="outline"
-                size="sm"
-                className="w-full"
-                onClick={handleReopenThread}
-              >
-                Reopen thread
-              </Button>
+              {isClosed ? (
+                <Button
+                  variant="outline"
+                  size="sm"
+                  className="w-full"
+                  onClick={handleReopenThread}
+                >
+                  Reopen thread
+                </Button>
+              ) : (
+                <Button
+                  variant="outline"
+                  size="sm"
+                  className="w-full"
+                  onClick={() => setShowCloseConfirm(true)}
+                  disabled={closing}
+                >
+                  Close thread
+                </Button>
+              )}
             </CardContent>
           </Card>
         </div>
       </div>
+
+      <ValidationWarningDialog
+        open={showCloseConfirm}
+        onOpenChange={setShowCloseConfirm}
+        title="Close this thread?"
+        description={`${
+          userProfile?.fullName || 'The user'
+        } won't be able to add to this conversation until it's reopened.`}
+        confirmLabel="Yes, close"
+        confirmVariant="destructive"
+        onConfirm={handleCloseThread}
+        loading={closing}
+      />
     </div>
   );
 }
@@ -482,9 +542,7 @@ function MessageBubble({ message }: { message: Message }) {
     <div className={`flex ${isAdmin ? 'justify-end' : 'justify-start'}`}>
       <div
         className={`max-w-[80%] rounded-2xl px-4 py-2 ${
-          isAdmin
-            ? 'bg-amber-600 text-white'
-            : 'bg-muted text-foreground'
+          isAdmin ? 'bg-amber-600 text-white' : 'bg-muted text-foreground'
         }`}
       >
         {isAdmin && message.adminName && (

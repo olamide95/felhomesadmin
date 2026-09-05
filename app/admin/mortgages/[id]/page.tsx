@@ -10,8 +10,8 @@ import {
   serverTimestamp,
 } from 'firebase/firestore';
 import { db, auth } from '@/lib/firebase';
-import { StatusBadge } from '@/components/shared/status-badge';
-import { ValidationWarningDialog } from '@/components/shared/validation-warning-dialog';
+import { StatusBadge } from '@/components/status-badge';
+import { ValidationWarningDialog } from '@/components/validation-warning-dialog';
 import { Card, CardContent } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
 import { Textarea } from '@/components/ui/textarea';

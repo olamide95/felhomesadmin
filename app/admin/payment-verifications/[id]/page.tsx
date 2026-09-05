@@ -16,9 +16,9 @@ import { db, auth } from '@/lib/firebase';
 import { Card, CardContent } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
 import { Textarea } from '@/components/ui/textarea';
-import { StatusBadge } from '@/components/shared/status-badge';
-import { PageHeader } from '@/components/shared/page-header';
-import { ValidationWarningDialog } from '@/components/shared/validation-warning-dialog';
+import { StatusBadge } from '@/components/status-badge';
+import { PageHeader } from '@/components/page-header';
+import { ValidationWarningDialog } from '@/components/validation-warning-dialog';
 import { toast } from 'sonner';
 import {
   ArrowLeft,
