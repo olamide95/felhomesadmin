@@ -499,7 +499,7 @@ export default function MortgageDetailPage() {
                   </label>
                   <Select
                     value={selectedNextStage}
-                    onValueChange={setSelectedNextStage}
+                    onValueChange={(v) => { if (v !== null) setSelectedNextStage(v) }}
                   >
                     <SelectTrigger className="mt-1">
                       <SelectValue placeholder="Choose next stage..." />

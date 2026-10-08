@@ -132,7 +132,7 @@ export default function RentToOwnPage() {
             onChange={(e) => setSearch(e.target.value)}
           />
         </div>
-        <Select value={statusFilter} onValueChange={setStatusFilter}>
+        <Select value={statusFilter} onValueChange={(v) => { if (v !== null) setStatusFilter(v) }}>
           <SelectTrigger className="w-full sm:w-[200px]">
             <SelectValue />
           </SelectTrigger>

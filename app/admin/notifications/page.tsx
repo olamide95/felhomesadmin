@@ -91,7 +91,7 @@ export default function NotificationsPage() {
           <CardContent className="space-y-4">
             <div className="space-y-1.5">
               <Label className="text-xs font-medium">Audience</Label>
-              <Select value={audience} onValueChange={setAudience}>
+              <Select value={audience} onValueChange={(v) => { if (v !== null) setAudience(v) }}>
                 <SelectTrigger>
                   <SelectValue />
                 </SelectTrigger>

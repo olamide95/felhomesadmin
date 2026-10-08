@@ -99,7 +99,7 @@ export default function UsersPage() {
           <Input placeholder="Search by name, email or phone…" value={search}
             onChange={e => setSearch(e.target.value)} className="pl-9" />
         </div>
-        <Select value={filter} onValueChange={setFilter}>
+        <Select value={filter} onValueChange={(v) => { if (v !== null) setFilter(v) }}>
           <SelectTrigger className="w-full sm:w-[180px]"><SelectValue /></SelectTrigger>
           <SelectContent>
             <SelectItem value="all">All users</SelectItem>

@@ -177,7 +177,7 @@ export default function MortgagesPage() {
             onChange={(e) => setSearch(e.target.value)}
           />
         </div>
-        <Select value={stageFilter} onValueChange={setStageFilter}>
+        <Select value={stageFilter} onValueChange={(v) => { if (v !== null) setStageFilter(v) }}>
           <SelectTrigger className="w-full sm:w-[220px]">
             <SelectValue />
           </SelectTrigger>

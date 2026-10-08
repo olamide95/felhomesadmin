@@ -171,7 +171,7 @@ export default function PaymentVerificationsPage() {
           <Input placeholder="Search by name, bank…" value={search}
             onChange={e => setSearch(e.target.value)} className="pl-9" />
         </div>
-        <Select value={statusFilter} onValueChange={setStatusFilter}>
+        <Select value={statusFilter} onValueChange={(v) => { if (v !== null) setStatusFilter(v) }}>
           <SelectTrigger className="w-full sm:w-[160px]"><SelectValue /></SelectTrigger>
           <SelectContent>
             <SelectItem value="pending">Pending</SelectItem>
