@@ -1,5 +1,5 @@
-import type { LucideIcon, ReactNode } from 'lucide-react';
-
+import type { ReactNode } from 'react';
+import type { LucideIcon } from 'lucide-react';
 export function EmptyState({
   icon: Icon,
   title,
