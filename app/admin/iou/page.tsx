@@ -1,350 +1,258 @@
-"use client";
+'use client';
 
-import { useState } from "react";
+import { useEffect, useMemo, useState } from 'react';
 import {
-  orderBy,
-  where,
-  doc,
-  runTransaction,
-  serverTimestamp,
-  collection,
-} from "firebase/firestore";
-import { FileText, Check, X, Loader2, Eye } from "lucide-react";
-import { toast } from "sonner";
-import { db } from "@/lib/firebase";
-import { Paths, formatNaira, Business } from "@/lib/constants";
-import { formatDateTime } from "@/lib/firestore-helpers";
-import { useFirestoreQuery } from "@/hooks/use-firestore-query";
-import { PageHeader } from "@/components/page-header";
-import { EmptyState } from "@/components/empty-state";
-import { StatusBadge } from "@/components/status-badge";
-import { Tabs, TabsList, TabsTrigger, TabsContent } from "@/components/ui/tabs";
-import {
-  Table,
-  TableBody,
-  TableCell,
-  TableHead,
-  TableHeader,
-  TableRow,
-} from "@/components/ui/table";
-import { Button } from "@/components/ui/button";
-import { Card, CardContent } from "@/components/ui/card";
-import {
-  Dialog,
-  DialogContent,
-  DialogDescription,
-  DialogFooter,
-  DialogHeader,
-  DialogTitle,
-} from "@/components/ui/dialog";
-import { Textarea } from "@/components/ui/textarea";
+  collection, onSnapshot, orderBy, query, where,
+  doc, runTransaction, serverTimestamp,
+} from 'firebase/firestore';
+import { FileText, Search, Loader2, CheckCircle2, XCircle } from 'lucide-react';
+import { toast } from 'sonner';
+import { db } from '@/lib/firebase';
+import { Paths, formatNaira, formatCompactNaira, formatDateTime, formatDate } from '@/lib/constants';
+import { PageHeader } from '@/components/shared/page-header';
+import { EmptyState } from '@/components/shared/empty-state';
+import { StatusBadge } from '@/components/shared/status-badge';
+import { ValidationWarningDialog } from '@/components/shared/validation-warning-dialog';
+import { Card, CardContent } from '@/components/ui/card';
+import { Input } from '@/components/ui/input';
+import { Button } from '@/components/ui/button';
+import { Textarea } from '@/components/ui/textarea';
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
+import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table';
+import { useAuth } from '@/lib/auth';
 
-type IouDoc = {
+interface IouApplication {
   id: string;
   uid?: string;
-  propertyId?: string;
-  propertyValue?: number;
-  annualRentValue?: number;
-  iouAmount?: number;
-  termYears?: number;
-  repaymentMode?: string;
+  userFullName?: string;
+  userEmail?: string;
+  amountRequested?: number;
+  amountApproved?: number;
+  monthlyRepayment?: number;
+  totalRepayable?: number;
+  repaymentMonths?: number;
+  purpose?: string;
   status?: string;
-  createdAt?: any;
-  approvedAt?: any;
   rejectionReason?: string;
-};
-
-const STATUS_TABS = ["pending", "approved", "active", "completed", "rejected"] as const;
+  createdAt?: { seconds: number };
+  approvedAt?: { seconds: number };
+}
 
 export default function IouPage() {
-  const [tab, setTab] = useState<(typeof STATUS_TABS)[number]>("pending");
-  const [selected, setSelected] = useState<IouDoc | null>(null);
-  const [mode, setMode] = useState<"none" | "approve" | "reject">("none");
-  const [reason, setReason] = useState("");
+  const { permissions } = useAuth();
+  const [items, setItems] = useState<IouApplication[]>([]);
+  const [loading, setLoading] = useState(true);
+  const [statusFilter, setStatusFilter] = useState('pending');
+  const [search, setSearch] = useState('');
+  const [approveTarget, setApproveTarget] = useState<IouApplication | null>(null);
+  const [rejectTarget, setRejectTarget] = useState<IouApplication | null>(null);
+  const [rejectReason, setRejectReason] = useState('');
   const [working, setWorking] = useState(false);
 
-  const { docs, loading } = useFirestoreQuery<IouDoc>(
-    Paths.iouApplications,
-    [where("status", "==", tab), orderBy("createdAt", "desc")],
-    [tab]
-  );
+  useEffect(() => {
+    setLoading(true);
+    const constraints: any[] = [orderBy('createdAt', 'desc')];
+    if (statusFilter !== 'all') constraints.unshift(where('status', '==', statusFilter));
+    const unsub = onSnapshot(
+      query(collection(db, Paths.iouApplications), ...constraints),
+      snap => { setItems(snap.docs.map(d => ({ id: d.id, ...d.data() } as IouApplication))); setLoading(false); },
+      err => { toast.error(err.message); setLoading(false); }
+    );
+    return () => unsub();
+  }, [statusFilter]);
 
-  function open(doc: IouDoc) {
-    setSelected(doc);
-    setMode("none");
-    setReason("");
-  }
-  function close() {
-    setSelected(null);
-    setMode("none");
-    setReason("");
-  }
+  const filtered = useMemo(() => {
+    if (!search.trim()) return items;
+    const q = search.toLowerCase();
+    return items.filter(i =>
+      [i.userFullName, i.userEmail, i.uid]
+        .filter(Boolean).some(v => String(v).toLowerCase().includes(q))
+    );
+  }, [items, search]);
 
-  /**
-   * Approve: mark application active, credit user wallet with iouAmount, log txn.
-   */
   async function approve() {
-    if (!selected || !selected.uid) return;
+    if (!approveTarget) return;
     setWorking(true);
     try {
-      await runTransaction(db, async (txn) => {
-        const appRef = doc(db, Paths.iouApplications, selected.id);
+      await runTransaction(db, async txn => {
+        const appRef = doc(db, Paths.iouApplications, approveTarget.id);
         const appSnap = await txn.get(appRef);
-        if (!appSnap.exists()) throw new Error("Application not found");
-        if (appSnap.data().status !== "pending") {
-          throw new Error("Application already processed");
-        }
-        const amount = (selected.iouAmount as number) ?? 0;
+        if (!appSnap.exists()) throw new Error('Application not found');
+        const data = appSnap.data();
+        if (data.status !== 'pending') throw new Error('Already processed');
 
-        const walletRef = doc(db, Paths.wallets, selected.uid!);
+        const uid = data.uid as string;
+        const amount = (data.amountRequested as number) ?? 0;
+
+        // Credit wallet
+        const walletRef = doc(db, Paths.wallets, uid);
         const walletSnap = await txn.get(walletRef);
-        const prev = ((walletSnap.data()?.balance as number) ?? 0);
-
+        const prev = (walletSnap.data()?.balance ?? 0) as number;
         if (walletSnap.exists()) {
-          txn.update(walletRef, {
-            balance: prev + amount,
-            updatedAt: serverTimestamp(),
-          });
+          txn.update(walletRef, { balance: prev + amount, updatedAt: serverTimestamp() });
         } else {
           txn.set(walletRef, {
-            balance: amount,
-            totalEarnings: 0,
-            referralEarnings: 0,
-            sponsorEarnings: 0,
-            investmentReturns: 0,
-            salesEarnings: 0,
-            pendingWithdrawals: 0,
-            updatedAt: serverTimestamp(),
+            balance: amount, totalEarnings: 0, referralEarnings: 0,
+            sponsorEarnings: 0, investmentReturns: 0, salesEarnings: 0,
+            pendingWithdrawals: 0, updatedAt: serverTimestamp(),
           });
         }
 
-        txn.update(appRef, {
-          status: "active",
-          approvedAt: serverTimestamp(),
-          fundedAt: serverTimestamp(),
-        });
-
-        const txRef = doc(collection(db, Paths.transactions));
+        // Log disbursement
+        const txRef = doc(db, Paths.transactions, `iou_disburse_${approveTarget.id}`);
         txn.set(txRef, {
-          uid: selected.uid,
-          kind: "iouDisbursement",
-          direction: "credit",
-          status: "completed",
-          amount,
-          title: "IOU Funded",
-          description: `IOU application approved against property ${selected.propertyId}`,
-          reference: selected.id,
+          uid, kind: 'iouDisbursement', direction: 'credit', status: 'completed',
+          amount, title: 'IOU Disbursement',
+          description: `IOU approved — ${data.repaymentMonths ?? 12} months repayment`,
+          metadata: { iouId: approveTarget.id },
           createdAt: serverTimestamp(),
         });
+
+        txn.update(appRef, { status: 'approved', approvedAt: serverTimestamp(), amountApproved: amount });
       });
-      toast.success("IOU approved and funded");
-      close();
+      toast.success('IOU approved — wallet credited');
+      setApproveTarget(null);
     } catch (e: any) {
-      toast.error(e.message ?? "Failed to approve");
+      toast.error(e.message ?? 'Approval failed');
     } finally {
       setWorking(false);
     }
   }
 
   async function reject() {
-    if (!selected) return;
-    if (reason.trim().length < 5) {
-      toast.error("Provide a reason of at least 5 characters.");
-      return;
+    if (!rejectTarget || rejectReason.trim().length < 3) {
+      toast.error('Rejection reason required'); return;
     }
     setWorking(true);
     try {
-      const appRef = doc(db, Paths.iouApplications, selected.id);
-      await runTransaction(db, async (txn) => {
-        const s = await txn.get(appRef);
-        if (!s.exists()) throw new Error("Application not found");
-        if (s.data().status !== "pending") throw new Error("Already processed");
-        txn.update(appRef, {
-          status: "rejected",
-          rejectionReason: reason.trim(),
-          processedAt: serverTimestamp(),
-        });
+      await runTransaction(db, async txn => {
+        const ref = doc(db, Paths.iouApplications, rejectTarget.id);
+        const snap = await txn.get(ref);
+        if (!snap.exists()) throw new Error('Not found');
+        if (snap.data().status !== 'pending') throw new Error('Already processed');
+        txn.update(ref, { status: 'rejected', rejectionReason: rejectReason.trim(), rejectedAt: serverTimestamp() });
       });
-      toast.success("IOU application rejected");
-      close();
+      toast.success('IOU application rejected');
+      setRejectTarget(null); setRejectReason('');
     } catch (e: any) {
-      toast.error(e.message ?? "Failed to reject");
+      toast.error(e.message ?? 'Failed');
     } finally {
       setWorking(false);
     }
   }
 
   return (
-    <div>
+    <div className="space-y-6">
       <PageHeader
         title="IOU Applications"
-        description={`Property-backed loans · Term ${Business.iouLoanMultiplierYears} years · Monthly repay ${Business.iouMonthlyRepaymentPercent}% / Annual ${Business.iouAnnualRepaymentPercent}%`}
+        description={`${items.filter(i => i.status === 'pending').length} pending review`}
       />
-      <Tabs value={tab} onValueChange={(v) => setTab(v as any)}>
-        <TabsList>
-          {STATUS_TABS.map((s) => (
-            <TabsTrigger key={s} value={s} className="capitalize">
-              {s}
-            </TabsTrigger>
-          ))}
-        </TabsList>
-        {STATUS_TABS.map((s) => (
-          <TabsContent key={s} value={s}>
-            <Card>
-              <CardContent className="p-0">
-                {loading ? (
-                  <div className="flex justify-center p-12">
-                    <Loader2 className="h-6 w-6 animate-spin text-muted-foreground" />
-                  </div>
-                ) : docs.length === 0 ? (
-                  <div className="p-6">
-                    <EmptyState
-                      icon={FileText}
-                      title={`No ${s} applications`}
-                      message="IOU applications submitted by users will appear here."
-                    />
-                  </div>
-                ) : (
-                  <Table>
-                    <TableHeader>
-                      <TableRow>
-                        <TableHead>User</TableHead>
-                        <TableHead>Property</TableHead>
-                        <TableHead className="text-right">IOU Amount</TableHead>
-                        <TableHead>Term</TableHead>
-                        <TableHead>Repayment</TableHead>
-                        <TableHead>Submitted</TableHead>
-                        <TableHead className="text-right">Actions</TableHead>
-                      </TableRow>
-                    </TableHeader>
-                    <TableBody>
-                      {docs.map((a) => (
-                        <TableRow key={a.id}>
-                          <TableCell className="font-mono text-xs">
-                            {a.uid?.slice(0, 8) ?? "—"}
-                          </TableCell>
-                          <TableCell className="font-mono text-xs">
-                            {a.propertyId?.slice(0, 10) ?? "—"}
-                          </TableCell>
-                          <TableCell className="text-right font-semibold">
-                            {formatNaira(a.iouAmount)}
-                          </TableCell>
-                          <TableCell>{a.termYears} yrs</TableCell>
-                          <TableCell className="capitalize">{a.repaymentMode}</TableCell>
-                          <TableCell className="text-sm">
-                            {formatDateTime(a.createdAt)}
-                          </TableCell>
-                          <TableCell className="text-right">
-                            <Button variant="ghost" size="sm" onClick={() => open(a)}>
-                              <Eye className="h-4 w-4" />
-                              Review
+
+      <div className="flex flex-col gap-3 sm:flex-row">
+        <div className="relative flex-1">
+          <Search className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-slate-400" />
+          <Input placeholder="Search by name or email…" value={search}
+            onChange={e => setSearch(e.target.value)} className="pl-9" />
+        </div>
+        <Select value={statusFilter} onValueChange={setStatusFilter}>
+          <SelectTrigger className="w-full sm:w-[160px]"><SelectValue /></SelectTrigger>
+          <SelectContent>
+            <SelectItem value="pending">Pending</SelectItem>
+            <SelectItem value="approved">Approved</SelectItem>
+            <SelectItem value="rejected">Rejected</SelectItem>
+            <SelectItem value="active">Active</SelectItem>
+            <SelectItem value="all">All</SelectItem>
+          </SelectContent>
+        </Select>
+      </div>
+
+      <Card>
+        <CardContent className="p-0">
+          {loading ? (
+            <div className="flex justify-center py-16"><Loader2 className="h-5 w-5 animate-spin text-slate-400" /></div>
+          ) : filtered.length === 0 ? (
+            <div className="p-8"><EmptyState icon={FileText} title="No IOU applications" message="Try a different filter." /></div>
+          ) : (
+            <Table>
+              <TableHeader>
+                <TableRow>
+                  <TableHead>Applicant</TableHead>
+                  <TableHead className="text-right">Requested</TableHead>
+                  <TableHead>Repayment</TableHead>
+                  <TableHead>Purpose</TableHead>
+                  <TableHead>Applied</TableHead>
+                  <TableHead>Status</TableHead>
+                  {permissions?.canApproveIou && <TableHead className="text-right">Actions</TableHead>}
+                </TableRow>
+              </TableHeader>
+              <TableBody>
+                {filtered.map(item => (
+                  <TableRow key={item.id} className="hover:bg-muted/40">
+                    <TableCell>
+                      <p className="text-sm font-semibold text-slate-800">{item.userFullName ?? '—'}</p>
+                      <p className="text-xs text-slate-400">{item.userEmail}</p>
+                    </TableCell>
+                    <TableCell className="text-right font-bold text-sm">{formatCompactNaira(item.amountRequested)}</TableCell>
+                    <TableCell className="text-xs text-slate-600">
+                      {item.repaymentMonths ?? '—'} months
+                      {item.monthlyRepayment && (
+                        <div className="text-slate-400">{formatCompactNaira(item.monthlyRepayment)}/mo</div>
+                      )}
+                    </TableCell>
+                    <TableCell className="text-sm max-w-[160px] truncate">{item.purpose ?? '—'}</TableCell>
+                    <TableCell className="text-xs text-slate-500">{formatDate(item.createdAt)}</TableCell>
+                    <TableCell><StatusBadge status={item.status} /></TableCell>
+                    {permissions?.canApproveIou && (
+                      <TableCell className="text-right">
+                        {item.status === 'pending' && (
+                          <div className="flex items-center justify-end gap-1">
+                            <Button size="sm" variant="ghost"
+                              className="text-green-600 hover:bg-green-50 h-7 px-2 text-xs"
+                              onClick={() => setApproveTarget(item)}>
+                              <CheckCircle2 className="h-3.5 w-3.5 mr-1" />Approve
                             </Button>
-                          </TableCell>
-                        </TableRow>
-                      ))}
-                    </TableBody>
-                  </Table>
-                )}
-              </CardContent>
-            </Card>
-          </TabsContent>
-        ))}
-      </Tabs>
-
-      <Dialog open={!!selected} onOpenChange={(o) => !o && close()}>
-        <DialogContent>
-          {selected && (
-            <>
-              <DialogHeader>
-                <DialogTitle>IOU Application</DialogTitle>
-                <DialogDescription className="flex items-center gap-2">
-                  <StatusBadge status={selected.status} />
-                  <span>·</span>
-                  <span>{formatNaira(selected.iouAmount)}</span>
-                </DialogDescription>
-              </DialogHeader>
-
-              <div className="space-y-2 text-sm">
-                <Row label="User UID" value={<span className="font-mono text-xs">{selected.uid}</span>} />
-                <Row label="Property ID" value={<span className="font-mono text-xs">{selected.propertyId}</span>} />
-                <Row label="Property value" value={formatNaira(selected.propertyValue)} />
-                <Row label="Annual rent" value={formatNaira(selected.annualRentValue)} />
-                <Row label="IOU amount" value={<strong>{formatNaira(selected.iouAmount)}</strong>} />
-                <Row label="Term" value={`${selected.termYears} years`} />
-                <Row label="Repayment mode" value={<span className="capitalize">{selected.repaymentMode}</span>} />
-                <Row label="Submitted" value={formatDateTime(selected.createdAt)} />
-                {selected.approvedAt && (
-                  <Row label="Approved" value={formatDateTime(selected.approvedAt)} />
-                )}
-                {selected.rejectionReason && (
-                  <Row label="Rejection reason" value={selected.rejectionReason} />
-                )}
-              </div>
-
-              {selected.status === "pending" && mode === "reject" && (
-                <div className="space-y-2 rounded-md border bg-muted/30 p-3">
-                  <Textarea
-                    placeholder="Reason for rejection (visible to the user)"
-                    value={reason}
-                    onChange={(e) => setReason(e.target.value)}
-                    rows={3}
-                  />
-                </div>
-              )}
-              {selected.status === "pending" && mode === "approve" && (
-                <div className="space-y-2 rounded-md border border-amber-300 bg-amber-50 p-3 text-sm">
-                  <p className="font-medium">Confirm IOU funding</p>
-                  <p className="text-muted-foreground">
-                    {formatNaira(selected.iouAmount)} will be credited to the user&apos;s
-                    wallet immediately. Their property is locked as collateral
-                    until the IOU is repaid in full.
-                  </p>
-                </div>
-              )}
-
-              <DialogFooter className="flex-row gap-2">
-                {selected.status === "pending" && mode === "none" && (
-                  <>
-                    <Button variant="destructive" onClick={() => setMode("reject")}>
-                      <X className="h-4 w-4" /> Reject
-                    </Button>
-                    <Button onClick={() => setMode("approve")}>
-                      <Check className="h-4 w-4" /> Approve & Fund
-                    </Button>
-                  </>
-                )}
-                {mode === "approve" && (
-                  <>
-                    <Button variant="outline" onClick={() => setMode("none")}>Back</Button>
-                    <Button onClick={approve} disabled={working}>
-                      {working && <Loader2 className="h-4 w-4 animate-spin" />}
-                      Fund wallet now
-                    </Button>
-                  </>
-                )}
-                {mode === "reject" && (
-                  <>
-                    <Button variant="outline" onClick={() => setMode("none")}>Back</Button>
-                    <Button variant="destructive" onClick={reject} disabled={working}>
-                      {working && <Loader2 className="h-4 w-4 animate-spin" />}
-                      Confirm rejection
-                    </Button>
-                  </>
-                )}
-              </DialogFooter>
-            </>
+                            <Button size="sm" variant="ghost"
+                              className="text-red-500 hover:bg-red-50 h-7 px-2 text-xs"
+                              onClick={() => { setRejectTarget(item); setRejectReason(''); }}>
+                              <XCircle className="h-3.5 w-3.5 mr-1" />Reject
+                            </Button>
+                          </div>
+                        )}
+                      </TableCell>
+                    )}
+                  </TableRow>
+                ))}
+              </TableBody>
+            </Table>
           )}
-        </DialogContent>
-      </Dialog>
-    </div>
-  );
-}
+        </CardContent>
+      </Card>
 
-function Row({ label, value }: { label: string; value: React.ReactNode }) {
-  return (
-    <div className="flex items-start justify-between gap-4 py-1">
-      <div className="text-muted-foreground">{label}</div>
-      <div className="text-right">{value}</div>
+      <ValidationWarningDialog
+        open={!!approveTarget} onOpenChange={o => { if (!o) setApproveTarget(null); }}
+        title="Approve IOU application?"
+        description={`${formatCompactNaira(approveTarget?.amountRequested)} will be disbursed to ${approveTarget?.userFullName}'s wallet immediately.`}
+        confirmLabel="Yes, approve & disburse" onConfirm={approve} loading={working}
+      />
+
+      {rejectTarget && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 backdrop-blur-sm">
+          <div className="w-full max-w-md rounded-2xl bg-white p-6 shadow-2xl mx-4">
+            <h3 className="text-base font-semibold text-slate-900 mb-1">Reject IOU application?</h3>
+            <p className="text-sm text-slate-500 mb-4">This reason will be shown to the user.</p>
+            <Textarea value={rejectReason} onChange={e => setRejectReason(e.target.value)}
+              placeholder="e.g. Insufficient wallet activity to support this loan amount."
+              rows={3} className="mb-4" />
+            <div className="flex justify-end gap-2">
+              <Button variant="outline" onClick={() => setRejectTarget(null)}>Cancel</Button>
+              <Button onClick={reject} disabled={working || rejectReason.trim().length < 3}
+                className="bg-red-600 hover:bg-red-700 text-white">
+                {working ? <Loader2 className="h-4 w-4 animate-spin" /> : 'Reject'}
+              </Button>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 }

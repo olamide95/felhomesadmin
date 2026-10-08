@@ -1,216 +1,233 @@
 'use client';
 
-import { useEffect, useMemo, useState } from 'react';
-import Link from 'next/link';
+import { useEffect, useRef, useState } from 'react';
 import {
-  collection,
-  onSnapshot,
-  orderBy,
-  query,
-  where,
+  collection, onSnapshot, orderBy, query, doc,
+  addDoc, updateDoc, serverTimestamp, Timestamp,
 } from 'firebase/firestore';
+import { MessageSquare, Send, Loader2, CheckCheck, User } from 'lucide-react';
+import { toast } from 'sonner';
 import { db } from '@/lib/firebase';
-import { PageHeader } from '@/components/page-header';
-import { EmptyState } from '@/components/empty-state';
+import { Paths, formatDateTime } from '@/lib/constants';
+import { PageHeader } from '@/components/shared/page-header';
+import { EmptyState } from '@/components/shared/empty-state';
 import { Card, CardContent } from '@/components/ui/card';
-import { Input } from '@/components/ui/input';
-import {
-  Select,
-  SelectContent,
-  SelectItem,
-  SelectTrigger,
-  SelectValue,
-} from '@/components/ui/select';
+import { Button } from '@/components/ui/button';
+import { Textarea } from '@/components/ui/textarea';
 import { Badge } from '@/components/ui/badge';
-import { Loader2, MessageCircle, User as UserIcon } from 'lucide-react';
+import { useAuth } from '@/lib/auth';
+import { cn } from '@/lib/utils';
 
-interface SupportThread {
+interface Thread {
   id: string;
   uid: string;
-  userFullName: string;
-  userEmail: string;
-  lastMessageBody?: string;
-  lastMessageAt: { seconds: number } | null;
-  lastMessageSender?: 'user' | 'admin';
-  status: 'open' | 'closed';
-  adminUnreadCount: number;
-  userUnreadCount: number;
+  userFullName?: string;
+  userEmail?: string;
+  lastMessage?: string;
+  lastMessageAt?: { seconds: number };
+  unreadByAdmin?: boolean;
+  status?: string;
+  createdAt?: { seconds: number };
 }
 
-function formatRelativeTime(ts: { seconds: number } | null | undefined): string {
-  if (!ts) return '—';
-  const diffMs = Date.now() - ts.seconds * 1000;
-  const min = Math.floor(diffMs / 60000);
-  if (min < 1) return 'just now';
-  if (min < 60) return `${min}m ago`;
-  const hrs = Math.floor(min / 60);
-  if (hrs < 24) return `${hrs}h ago`;
-  const days = Math.floor(hrs / 24);
-  if (days < 7) return `${days}d ago`;
-  return new Date(ts.seconds * 1000).toLocaleDateString('en-NG');
+interface Message {
+  id: string;
+  text: string;
+  senderRole: 'user' | 'admin';
+  senderName?: string;
+  createdAt?: { seconds: number };
 }
 
-export default function SupportThreadsPage() {
-  const [threads, setThreads] = useState<SupportThread[]>([]);
+export default function SupportPage() {
+  const { adminUser } = useAuth();
+  const [threads, setThreads] = useState<Thread[]>([]);
+  const [selected, setSelected] = useState<Thread | null>(null);
+  const [messages, setMessages] = useState<Message[]>([]);
+  const [reply, setReply] = useState('');
+  const [sending, setSending] = useState(false);
   const [loading, setLoading] = useState(true);
-  const [error, setError] = useState<string | null>(null);
-  const [statusFilter, setStatusFilter] = useState<'open' | 'closed' | 'all' | 'unread'>('open');
-  const [searchQuery, setSearchQuery] = useState('');
+  const bottomRef = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
-    setLoading(true);
-    setError(null);
-    const constraints: any[] = [orderBy('lastMessageAt', 'desc')];
-    if (statusFilter === 'open' || statusFilter === 'closed') {
-      constraints.unshift(where('status', '==', statusFilter));
-    } else if (statusFilter === 'unread') {
-      constraints.unshift(where('adminUnreadCount', '>', 0));
-      // Firestore requires ordering by the range-filtered field first.
-      constraints.length = 0;
-      constraints.push(where('adminUnreadCount', '>', 0));
-      constraints.push(orderBy('adminUnreadCount', 'desc'));
-      constraints.push(orderBy('lastMessageAt', 'desc'));
-    }
-
-    const q = query(collection(db, 'support_threads'), ...constraints);
     const unsub = onSnapshot(
-      q,
-      (snap) => {
-        setThreads(
-          snap.docs.map((d) => ({
-            id: d.id,
-            ...(d.data() as Omit<SupportThread, 'id'>),
-          }))
-        );
-        setLoading(false);
-      },
-      (err) => {
-        setError(err.message);
+      query(collection(db, Paths.supportThreads), orderBy('lastMessageAt', 'desc')),
+      snap => {
+        setThreads(snap.docs.map(d => ({ id: d.id, ...d.data() } as Thread)));
         setLoading(false);
       }
     );
     return () => unsub();
-  }, [statusFilter]);
+  }, []);
 
-  const filtered = useMemo(() => {
-    if (!searchQuery.trim()) return threads;
-    const q = searchQuery.toLowerCase().trim();
-    return threads.filter((t) =>
-      [t.userFullName, t.userEmail, t.uid, t.lastMessageBody]
-        .filter(Boolean)
-        .some((v) => String(v).toLowerCase().includes(q))
+  useEffect(() => {
+    if (!selected) return;
+    const unsub = onSnapshot(
+      query(collection(db, Paths.supportThreads, selected.id, 'messages'), orderBy('createdAt', 'asc')),
+      snap => {
+        setMessages(snap.docs.map(d => ({ id: d.id, ...d.data() } as Message)));
+        setTimeout(() => bottomRef.current?.scrollIntoView({ behavior: 'smooth' }), 100);
+      }
     );
-  }, [threads, searchQuery]);
+    // Mark as read
+    updateDoc(doc(db, Paths.supportThreads, selected.id), { unreadByAdmin: false }).catch(() => {});
+    return () => unsub();
+  }, [selected?.id]);
 
-  const unreadCount = threads.filter((t) => t.adminUnreadCount > 0).length;
+  useEffect(() => {
+    bottomRef.current?.scrollIntoView({ behavior: 'smooth' });
+  }, [messages]);
+
+  async function sendReply() {
+    if (!reply.trim() || !selected) return;
+    setSending(true);
+    try {
+      const text = reply.trim();
+      setReply('');
+      await addDoc(collection(db, Paths.supportThreads, selected.id, 'messages'), {
+        text,
+        senderRole: 'admin',
+        senderName: adminUser?.displayName ?? adminUser?.email ?? 'Support',
+        createdAt: serverTimestamp(),
+      });
+      await updateDoc(doc(db, Paths.supportThreads, selected.id), {
+        lastMessage: text,
+        lastMessageAt: serverTimestamp(),
+        unreadByUser: true,
+        unreadByAdmin: false,
+      });
+    } catch (e: any) {
+      toast.error(e.message ?? 'Failed to send');
+    } finally {
+      setSending(false);
+    }
+  }
+
+  const unreadCount = threads.filter(t => t.unreadByAdmin).length;
 
   return (
     <div className="space-y-6">
       <PageHeader
-        title="Support Threads"
-        description="Reply to user messages and manage support conversations"
+        title="Support Chat"
+        description={`${threads.length} thread${threads.length !== 1 ? 's' : ''}${unreadCount > 0 ? ` · ${unreadCount} unread` : ''}`}
       />
 
-      <div className="flex flex-col gap-3 sm:flex-row sm:items-center">
-        <div className="flex-1">
-          <Input
-            placeholder="Search by name, email, uid, or message text..."
-            value={searchQuery}
-            onChange={(e) => setSearchQuery(e.target.value)}
-          />
-        </div>
-        <Select value={statusFilter} onValueChange={(v: any) => setStatusFilter(v)}>
-          <SelectTrigger className="w-full sm:w-[200px]">
-            <SelectValue />
-          </SelectTrigger>
-          <SelectContent>
-            <SelectItem value="unread">
-              Needs reply
-              {unreadCount > 0 && (
-                <span className="ml-2 text-amber-600 font-semibold">
-                  ({unreadCount})
-                </span>
-              )}
-            </SelectItem>
-            <SelectItem value="open">Open</SelectItem>
-            <SelectItem value="closed">Closed</SelectItem>
-            <SelectItem value="all">All</SelectItem>
-          </SelectContent>
-        </Select>
-      </div>
-
-      <Card>
-        <CardContent className="p-0">
-          {loading ? (
-            <div className="flex items-center justify-center py-16">
-              <Loader2 className="h-6 w-6 animate-spin text-amber-600" />
-            </div>
-          ) : error ? (
-            <div className="p-8 text-center text-sm text-red-600">
-              Error: {error}
-            </div>
-          ) : filtered.length === 0 ? (
-            <div className="py-12">
-              <EmptyState
-                icon={MessageCircle}
-                title="No conversations found"
-                message={
-                  statusFilter === 'unread'
-                    ? 'All caught up — no messages waiting for a reply.'
-                    : 'No support threads match your filters.'
-                }
-              />
-            </div>
-          ) : (
-            <div className="divide-y">
-              {filtered.map((t) => (
-                <Link
-                  key={t.id}
-                  href={`/admin/support/${t.id}`}
-                  className="block hover:bg-muted/40 transition-colors"
-                >
-                  <div className="p-4 flex items-start gap-3">
-                    <div className="h-10 w-10 rounded-full bg-amber-100 flex items-center justify-center shrink-0">
-                      <UserIcon className="h-5 w-5 text-amber-700" />
+      <div className="grid gap-4 lg:grid-cols-3 h-[calc(100vh-200px)] min-h-[500px]">
+        {/* Thread list */}
+        <Card className="lg:col-span-1 overflow-hidden flex flex-col">
+          <div className="p-3 border-b border-slate-100 shrink-0">
+            <p className="text-xs font-semibold text-slate-500 uppercase tracking-wide">Conversations</p>
+          </div>
+          <div className="flex-1 overflow-y-auto">
+            {loading ? (
+              <div className="flex justify-center py-8">
+                <Loader2 className="h-5 w-5 animate-spin text-slate-400" />
+              </div>
+            ) : threads.length === 0 ? (
+              <div className="p-4">
+                <EmptyState icon={MessageSquare} title="No conversations" message="User messages will appear here." />
+              </div>
+            ) : (
+              <div className="divide-y divide-slate-50">
+                {threads.map(t => (
+                  <button key={t.id} onClick={() => setSelected(t)}
+                    className={cn('w-full text-left px-4 py-3 hover:bg-slate-50 transition-colors',
+                      selected?.id === t.id && 'bg-[#C89B3C]/5 border-r-2 border-[#C89B3C]')}>
+                    <div className="flex items-start justify-between gap-2">
+                      <div className="flex items-center gap-2 min-w-0">
+                        <div className="h-8 w-8 rounded-full bg-[#C89B3C]/10 flex items-center justify-center shrink-0 text-xs font-bold text-[#C89B3C]">
+                          {(t.userFullName ?? t.userEmail ?? 'U').slice(0, 2).toUpperCase()}
+                        </div>
+                        <div className="min-w-0">
+                          <p className="text-xs font-semibold text-slate-800 truncate">{t.userFullName ?? t.userEmail ?? t.uid.slice(0, 12)}</p>
+                          <p className="text-[10px] text-slate-400 truncate">{t.lastMessage ?? '—'}</p>
+                        </div>
+                      </div>
+                      <div className="shrink-0 flex flex-col items-end gap-1">
+                        <p className="text-[9px] text-slate-300">{formatDateTime(t.lastMessageAt)}</p>
+                        {t.unreadByAdmin && (
+                          <div className="h-2 w-2 rounded-full bg-[#C89B3C]" />
+                        )}
+                      </div>
                     </div>
-                    <div className="flex-1 min-w-0">
-                      <div className="flex items-baseline justify-between gap-3">
-                        <div className="font-semibold truncate">
-                          {t.userFullName || 'Unnamed user'}
-                          {t.adminUnreadCount > 0 && (
-                            <Badge
-                              variant="default"
-                              className="ml-2 bg-amber-600 hover:bg-amber-700"
-                            >
-                              {t.adminUnreadCount}
-                            </Badge>
-                          )}
-                        </div>
-                        <div className="text-xs text-muted-foreground shrink-0">
-                          {formatRelativeTime(t.lastMessageAt)}
-                        </div>
-                      </div>
-                      <div className="text-xs text-muted-foreground truncate">
-                        {t.userEmail}
-                      </div>
-                      {t.lastMessageBody && (
-                        <div className="text-sm mt-1 line-clamp-2 text-muted-foreground">
-                          {t.lastMessageSender === 'admin' && (
-                            <span className="text-amber-700 font-medium">
-                              You:{' '}
-                            </span>
-                          )}
-                          {t.lastMessageBody}
-                        </div>
+                  </button>
+                ))}
+              </div>
+            )}
+          </div>
+        </Card>
+
+        {/* Message pane */}
+        <Card className="lg:col-span-2 overflow-hidden flex flex-col">
+          {!selected ? (
+            <CardContent className="flex-1 flex items-center justify-center">
+              <div className="text-center">
+                <MessageSquare className="h-10 w-10 text-slate-200 mx-auto mb-3" />
+                <p className="text-sm text-slate-400">Select a conversation to view messages</p>
+              </div>
+            </CardContent>
+          ) : (
+            <>
+              {/* Thread header */}
+              <div className="border-b border-slate-100 px-4 py-3 shrink-0">
+                <div className="flex items-center gap-2">
+                  <div className="h-8 w-8 rounded-full bg-[#C89B3C]/10 flex items-center justify-center text-xs font-bold text-[#C89B3C]">
+                    {(selected.userFullName ?? selected.userEmail ?? 'U').slice(0, 2).toUpperCase()}
+                  </div>
+                  <div>
+                    <p className="text-sm font-semibold text-slate-800">{selected.userFullName ?? 'User'}</p>
+                    <p className="text-xs text-slate-400">{selected.userEmail} · {selected.uid.slice(0, 10)}…</p>
+                  </div>
+                </div>
+              </div>
+
+              {/* Messages */}
+              <div className="flex-1 overflow-y-auto p-4 space-y-3">
+                {messages.length === 0 && (
+                  <p className="text-center text-sm text-slate-300 py-8">No messages yet</p>
+                )}
+                {messages.map(m => (
+                  <div key={m.id} className={cn('flex', m.senderRole === 'admin' ? 'justify-end' : 'justify-start')}>
+                    <div className={cn('max-w-[75%] rounded-2xl px-3.5 py-2.5',
+                      m.senderRole === 'admin'
+                        ? 'bg-[#C89B3C] text-white rounded-tr-sm'
+                        : 'bg-slate-100 text-slate-800 rounded-tl-sm')}>
+                      {m.senderRole === 'admin' && (
+                        <p className="text-[9px] font-semibold opacity-70 mb-0.5">{m.senderName ?? 'Support'}</p>
                       )}
+                      <p className="text-sm leading-relaxed">{m.text}</p>
+                      <p className={cn('text-[9px] mt-1', m.senderRole === 'admin' ? 'text-white/60 text-right' : 'text-slate-400')}>
+                        {formatDateTime(m.createdAt)}
+                      </p>
                     </div>
                   </div>
-                </Link>
-              ))}
-            </div>
+                ))}
+                <div ref={bottomRef} />
+              </div>
+
+              {/* Reply box */}
+              <div className="border-t border-slate-100 p-3 shrink-0">
+                <div className="flex gap-2">
+                  <Textarea
+                    value={reply}
+                    onChange={e => setReply(e.target.value)}
+                    placeholder="Type your reply…"
+                    rows={2}
+                    className="resize-none text-sm"
+                    onKeyDown={e => {
+                      if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); sendReply(); }
+                    }}
+                  />
+                  <Button onClick={sendReply} disabled={sending || !reply.trim()}
+                    className="self-end bg-[#C89B3C] hover:bg-[#b08832] text-white px-3">
+                    {sending ? <Loader2 className="h-4 w-4 animate-spin" /> : <Send className="h-4 w-4" />}
+                  </Button>
+                </div>
+                <p className="mt-1 text-[10px] text-slate-400">Enter to send · Shift+Enter for new line</p>
+              </div>
+            </>
           )}
-        </CardContent>
-      </Card>
+        </Card>
+      </div>
     </div>
   );
 }

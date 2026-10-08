@@ -1,127 +1,119 @@
-"use client";
+'use client';
 
-import { useState, useEffect } from "react";
-import { useRouter } from "next/navigation";
-import { toast } from "sonner";
-import { Building2, Loader2 } from "lucide-react";
-import { useAuth } from "@/lib/auth";
-import { Button } from "@/components/ui/button";
-import { Input } from "@/components/ui/input";
-import { Label } from "@/components/ui/label";
-import {
-  Card,
-  CardContent,
-  CardDescription,
-  CardHeader,
-  CardTitle,
-} from "@/components/ui/card";
+import { useState } from 'react';
+import Image from 'next/image';
+import { useRouter } from 'next/navigation';
+import { useAuth } from '@/lib/auth';
+import { Button } from '@/components/ui/button';
+import { Input } from '@/components/ui/input';
+import { Label } from '@/components/ui/label';
+import { Loader2, Lock, Mail, Eye, EyeOff } from 'lucide-react';
 
 export default function LoginPage() {
-  const { user, isAdmin, loading, signIn } = useAuth();
+  const { signIn } = useAuth();
   const router = useRouter();
-  const [email, setEmail] = useState("");
-  const [password, setPassword] = useState("");
-  const [submitting, setSubmitting] = useState(false);
+  const [email, setEmail] = useState('');
+  const [password, setPassword] = useState('');
+  const [showPw, setShowPw] = useState(false);
+  const [loading, setLoading] = useState(false);
+  const [error, setError] = useState('');
 
-  useEffect(() => {
-    if (!loading && user && isAdmin) router.replace("/admin");
-  }, [loading, user, isAdmin, router]);
-
-  async function onSubmit(e: React.FormEvent) {
+  async function handleSubmit(e: React.FormEvent) {
     e.preventDefault();
-    setSubmitting(true);
+    setError('');
+    setLoading(true);
     try {
       await signIn(email, password);
+      router.push('/admin');
     } catch (err: any) {
-      const code = err?.code ?? "";
-      let message = "Sign-in failed.";
-      if (code === "auth/invalid-credential" || code === "auth/wrong-password")
-        message = "Invalid email or password.";
-      else if (code === "auth/user-not-found") message = "No account with that email.";
-      else if (code === "auth/too-many-requests") message = "Too many attempts. Try later.";
-      toast.error(message);
+      const msg = err?.code === 'auth/invalid-credential' || err?.code === 'auth/wrong-password'
+        ? 'Incorrect email or password.'
+        : err?.code === 'auth/user-not-found'
+          ? 'No account found with this email.'
+          : err?.code === 'auth/too-many-requests'
+            ? 'Too many attempts. Please try again later.'
+            : 'Sign in failed. Please try again.';
+      setError(msg);
     } finally {
-      setSubmitting(false);
+      setLoading(false);
     }
   }
 
-  // After successful login, if not an admin, show clear message.
-  if (!loading && user && !isAdmin) {
-    return (
-      <div className="flex min-h-screen items-center justify-center p-4">
-        <Card className="w-full max-w-md">
-          <CardHeader className="text-center">
-            <div className="mx-auto mb-2 flex h-12 w-12 items-center justify-center rounded-full bg-destructive/10">
-              <Building2 className="h-6 w-6 text-destructive" />
-            </div>
-            <CardTitle>Access Denied</CardTitle>
-            <CardDescription>
-              Your account is signed in but is not authorised to use the admin
-              console. Contact a system administrator.
-            </CardDescription>
-          </CardHeader>
-          <CardContent>
-            <Button
-              variant="outline"
-              className="w-full"
-              onClick={async () => {
-                const { auth } = await import("@/lib/firebase");
-                await auth.signOut();
-              }}
-            >
-              Sign out
-            </Button>
-          </CardContent>
-        </Card>
-      </div>
-    );
-  }
-
   return (
-    <div className="flex min-h-screen items-center justify-center bg-muted/30 p-4">
-      <Card className="w-full max-w-md">
-        <CardHeader className="text-center">
-          <div className="mx-auto mb-2 flex h-12 w-12 items-center justify-center rounded-lg bg-primary text-primary-foreground">
-            <Building2 className="h-6 w-6" />
+    <div className="min-h-screen bg-gradient-to-br from-slate-900 via-slate-800 to-slate-900 flex items-center justify-center p-4">
+      {/* Background decoration */}
+      <div className="absolute inset-0 overflow-hidden pointer-events-none">
+        <div className="absolute -top-40 -right-40 h-80 w-80 rounded-full bg-[#C89B3C]/10 blur-3xl" />
+        <div className="absolute -bottom-40 -left-40 h-80 w-80 rounded-full bg-[#C89B3C]/5 blur-3xl" />
+      </div>
+
+      <div className="relative w-full max-w-sm">
+        {/* Card */}
+        <div className="rounded-2xl border border-white/10 bg-white/5 backdrop-blur-xl p-8 shadow-2xl">
+          {/* Logo */}
+          <div className="mb-8 flex flex-col items-center gap-3">
+            <div className="rounded-2xl bg-white/10 p-3 border border-white/20">
+              <Image src="/logo.png" alt="Felhomes" width={52} height={52} className="rounded-xl object-contain" />
+            </div>
+            <div className="text-center">
+              <h1 className="text-xl font-bold text-white">Felhomes Admin</h1>
+              <p className="text-sm text-slate-400 mt-0.5">Sign in to your dashboard</p>
+            </div>
           </div>
-          <CardTitle>Felhomes Admin</CardTitle>
-          <CardDescription>Sign in to access the console</CardDescription>
-        </CardHeader>
-        <CardContent>
-          <form onSubmit={onSubmit} className="space-y-4">
-            <div className="space-y-2">
-              <Label htmlFor="email">Email</Label>
-              <Input
-                id="email"
-                type="email"
-                placeholder="admin@felhomes.com"
-                value={email}
-                onChange={(e) => setEmail(e.target.value)}
-                required
-                autoComplete="username"
-              />
+
+          <form onSubmit={handleSubmit} className="space-y-4">
+            <div className="space-y-1.5">
+              <Label htmlFor="email" className="text-slate-300 text-xs font-medium">Email address</Label>
+              <div className="relative">
+                <Mail className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-slate-500" />
+                <Input
+                  id="email"
+                  type="email"
+                  required
+                  value={email}
+                  onChange={(e) => setEmail(e.target.value)}
+                  placeholder="admin@felhomes.com"
+                  className="pl-9 bg-white/10 border-white/10 text-white placeholder:text-slate-500 focus:border-[#C89B3C]/50 focus:ring-[#C89B3C]/20"
+                />
+              </div>
             </div>
-            <div className="space-y-2">
-              <Label htmlFor="password">Password</Label>
-              <Input
-                id="password"
-                type="password"
-                value={password}
-                onChange={(e) => setPassword(e.target.value)}
-                required
-                autoComplete="current-password"
-              />
+
+            <div className="space-y-1.5">
+              <Label htmlFor="password" className="text-slate-300 text-xs font-medium">Password</Label>
+              <div className="relative">
+                <Lock className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-slate-500" />
+                <Input
+                  id="password"
+                  type={showPw ? 'text' : 'password'}
+                  required
+                  value={password}
+                  onChange={(e) => setPassword(e.target.value)}
+                  placeholder="••••••••"
+                  className="pl-9 pr-9 bg-white/10 border-white/10 text-white placeholder:text-slate-500 focus:border-[#C89B3C]/50 focus:ring-[#C89B3C]/20"
+                />
+                <button type="button" onClick={() => setShowPw(!showPw)}
+                  className="absolute right-3 top-1/2 -translate-y-1/2 text-slate-500 hover:text-slate-300">
+                  {showPw ? <EyeOff className="h-4 w-4" /> : <Eye className="h-4 w-4" />}
+                </button>
+              </div>
             </div>
-            <Button type="submit" className="w-full" disabled={submitting}>
-              {submitting && <Loader2 className="h-4 w-4 animate-spin" />}
-              Sign in
+
+            {error && (
+              <div className="rounded-lg bg-red-500/10 border border-red-500/20 px-3 py-2 text-xs text-red-400">
+                {error}
+              </div>
+            )}
+
+            <Button type="submit" disabled={loading} className="w-full bg-[#C89B3C] hover:bg-[#b08832] text-white font-semibold mt-2">
+              {loading ? <Loader2 className="h-4 w-4 animate-spin" /> : 'Sign in'}
             </Button>
           </form>
-          <p className="mt-6 text-center text-xs text-muted-foreground">
-            Restricted to authorised personnel. All activity is logged.
+
+          <p className="mt-6 text-center text-xs text-slate-500">
+            Felhomes Limited · Admin Access Only
           </p>
-        </CardContent>
-      </Card>
+        </div>
+      </div>
     </div>
   );
 }

@@ -2,7 +2,7 @@ rules_version = '2';
 service cloud.firestore {
   match /databases/{database}/documents {
 
-    // ── Helpers ──────────────────────────────────────────────────────────
+    // ── Helpers ────────────────────────────────────────────────────────────
     function isSignedIn() {
       return request.auth != null;
     }
@@ -14,22 +14,31 @@ service cloud.firestore {
         && exists(/databases/$(database)/documents/admins/$(request.auth.uid));
     }
 
-    // ── Admins allowlist ────────────────────────────────────────────────
-    // Only admins can read this collection (so users can't enumerate admin
-    // UIDs). Writes are manual via the Firestore Console for now.
+    // ── Admins allowlist ───────────────────────────────────────────────────
+    // Only admins can read/write this collection.
+    // Super admins manage this via the Roles page in the admin dashboard.
     match /admins/{uid} {
       allow read: if isAdmin();
-      allow write: if false;
+      allow write: if isAdmin();
     }
 
-    // ── Users ────────────────────────────────────────────────────────────
+    // ── Config ─────────────────────────────────────────────────────────────
+    // Platform settings — readable by all signed-in users (for fee displays),
+    // writable only by admins.
+    match /config/{docId} {
+      allow read: if isSignedIn();
+      allow write: if isAdmin();
+    }
+
+    // ── Users ──────────────────────────────────────────────────────────────
     match /users/{uid} {
       allow read: if true;
       allow create: if isOwner(uid);
       allow update: if isOwner(uid)
-        && request.resource.data.referralCode == resource.data.referralCode
-        && request.resource.data.sponsorCode == resource.data.sponsorCode
-        && request.resource.data.sponsorUid == resource.data.sponsorUid
+          // Users cannot change immutable identity fields
+          && request.resource.data.referralCode == resource.data.referralCode
+          && request.resource.data.sponsorCode  == resource.data.sponsorCode
+          && request.resource.data.sponsorUid   == resource.data.sponsorUid
         || isAdmin();
       allow delete: if isAdmin();
 
@@ -38,146 +47,189 @@ service cloud.firestore {
       }
     }
 
-    // ── Wallets ─────────────────────────────────────────────────────────
+    // ── Wallets ────────────────────────────────────────────────────────────
+    // Users can read their own wallet. Writes go through atomic transactions
+    // initiated by the mobile app (which already checks the signed-in uid),
+    // or by admin SDK Cloud Functions (bypasses rules).
     match /wallets/{uid} {
-      allow read: if isSignedIn() || isAdmin();
+      allow read: if isOwner(uid) || isAdmin();
       allow write: if isSignedIn() || isAdmin();
     }
 
-    // ── Transactions ────────────────────────────────────────────────────
+    // ── Transactions ───────────────────────────────────────────────────────
     match /transactions/{txId} {
-      allow read: if (isSignedIn() && resource.data.uid == request.auth.uid) || isAdmin();
+      allow read: if (isSignedIn() && resource.data.uid == request.auth.uid)
+                  || isAdmin();
       allow create: if isSignedIn();
       allow update, delete: if isAdmin();
     }
 
-    // ── Bank Accounts ───────────────────────────────────────────────────
+    // ── Bank Accounts ──────────────────────────────────────────────────────
     match /bank_accounts/{accountId} {
-      allow read, delete, update: if (isSignedIn() && resource.data.uid == request.auth.uid) || isAdmin();
-      allow create: if (isSignedIn() && request.resource.data.uid == request.auth.uid) || isAdmin();
+      allow read, delete, update: if
+        (isSignedIn() && resource.data.uid == request.auth.uid) || isAdmin();
+      allow create: if
+        (isSignedIn() && request.resource.data.uid == request.auth.uid) || isAdmin();
     }
 
-    // ── Withdrawal Requests ─────────────────────────────────────────────
+    // ── Withdrawal Requests ────────────────────────────────────────────────
     match /withdrawal_requests/{reqId} {
-      allow read: if (isSignedIn() && resource.data.uid == request.auth.uid) || isAdmin();
-      allow create: if (isSignedIn() && request.resource.data.uid == request.auth.uid);
+      allow read: if
+        (isSignedIn() && resource.data.uid == request.auth.uid) || isAdmin();
+      allow create: if
+        isSignedIn() && request.resource.data.uid == request.auth.uid;
       allow update, delete: if isAdmin();
     }
 
-    // ── Properties ──────────────────────────────────────────────────────
+    // ── Properties ─────────────────────────────────────────────────────────
+    // Users may list any category including rentToOwn. Rent-to-own listings
+    // go through the same pending → approved moderation as regular listings.
     match /properties/{propertyId} {
       allow read: if isSignedIn();
-      allow create: if isSignedIn()
-        && request.resource.data.ownerUid == request.auth.uid
-        && request.resource.data.status == 'pending'
+      allow create: if
+          isSignedIn()
+          && request.resource.data.ownerUid == request.auth.uid
+          && request.resource.data.status == 'pending'
         || isAdmin();
-      allow update: if (isSignedIn() && (
-        (resource.data.ownerUid == request.auth.uid
-          && resource.data.status in ['pending', 'rejected'])
-        || request.resource.data.status == 'sold'
-      )) || isAdmin();
-      allow delete: if (isSignedIn()
-        && resource.data.ownerUid == request.auth.uid
-        && resource.data.status in ['pending', 'rejected']) || isAdmin();
+      allow update: if
+          (isSignedIn() && (
+            (resource.data.ownerUid == request.auth.uid
+              && resource.data.status in ['pending', 'rejected'])
+            // RTO buyer can update availability during apply() atomic transaction
+            || request.resource.data.status == 'sold'
+            || request.resource.data.keys().hasAll(['availability', 'reservedForUid', 'reservedAt'])
+          ))
+        || isAdmin();
+      allow delete: if
+          (isSignedIn()
+            && resource.data.ownerUid == request.auth.uid
+            && resource.data.status in ['pending', 'rejected'])
+        || isAdmin();
     }
 
-    // ── Property-related requests ───────────────────────────────────────
+    // ── Property-related requests ──────────────────────────────────────────
     match /inspection_requests/{id} {
-      allow read: if (isSignedIn() && resource.data.uid == request.auth.uid) || isAdmin();
-      allow create: if isSignedIn() && request.resource.data.uid == request.auth.uid;
+      allow read: if
+        (isSignedIn() && resource.data.uid == request.auth.uid) || isAdmin();
+      allow create: if
+        isSignedIn() && request.resource.data.uid == request.auth.uid;
       allow update, delete: if isAdmin();
     }
     match /lease_requests/{id} {
-      allow read: if (isSignedIn() && resource.data.uid == request.auth.uid) || isAdmin();
-      allow create: if isSignedIn() && request.resource.data.uid == request.auth.uid;
+      allow read: if
+        (isSignedIn() && resource.data.uid == request.auth.uid) || isAdmin();
+      allow create: if
+        isSignedIn() && request.resource.data.uid == request.auth.uid;
       allow update, delete: if isAdmin();
     }
     match /rental_requests/{id} {
-      allow read: if (isSignedIn() && resource.data.uid == request.auth.uid) || isAdmin();
-      allow create: if isSignedIn() && request.resource.data.uid == request.auth.uid;
+      allow read: if
+        (isSignedIn() && resource.data.uid == request.auth.uid) || isAdmin();
+      allow create: if
+        isSignedIn() && request.resource.data.uid == request.auth.uid;
       allow update, delete: if isAdmin();
     }
     match /management_requests/{id} {
-      allow read: if (isSignedIn() && resource.data.uid == request.auth.uid) || isAdmin();
-      allow create: if isSignedIn() && request.resource.data.uid == request.auth.uid;
+      allow read: if
+        (isSignedIn() && resource.data.uid == request.auth.uid) || isAdmin();
+      allow create: if
+        isSignedIn() && request.resource.data.uid == request.auth.uid;
       allow update, delete: if isAdmin();
     }
     match /property_purchases/{id} {
-      allow read: if isSignedIn() && (
-        resource.data.buyerUid == request.auth.uid
-        || resource.data.sellerUid == request.auth.uid
-        || resource.data.referrerUid == request.auth.uid
-      ) || isAdmin();
+      allow read: if
+          isSignedIn() && (
+            resource.data.buyerUid    == request.auth.uid ||
+            resource.data.sellerUid   == request.auth.uid ||
+            resource.data.referrerUid == request.auth.uid
+          )
+        || isAdmin();
       allow create: if isSignedIn();
       allow update, delete: if isAdmin();
     }
 
-    // ── IOU ─────────────────────────────────────────────────────────────
+    // ── IOU ────────────────────────────────────────────────────────────────
     match /iou_applications/{id} {
-      allow read: if (isSignedIn() && resource.data.uid == request.auth.uid) || isAdmin();
-      allow create: if isSignedIn() && request.resource.data.uid == request.auth.uid;
+      allow read: if
+        (isSignedIn() && resource.data.uid == request.auth.uid) || isAdmin();
+      allow create: if
+        isSignedIn() && request.resource.data.uid == request.auth.uid;
       allow update, delete: if isAdmin();
     }
 
-    // ── Investments ─────────────────────────────────────────────────────
+    // ── Investments ────────────────────────────────────────────────────────
     match /investments/{id} {
       allow read: if isSignedIn();
       allow write: if isAdmin() || isSignedIn();
     }
     match /investment_participations/{id} {
-      allow read: if (isSignedIn() && resource.data.uid == request.auth.uid) || isAdmin();
-      allow create: if isSignedIn() && request.resource.data.uid == request.auth.uid;
+      allow read: if
+        (isSignedIn() && resource.data.uid == request.auth.uid) || isAdmin();
+      allow create: if
+        isSignedIn() && request.resource.data.uid == request.auth.uid;
       allow update, delete: if isAdmin();
     }
 
-    // ── Build projects ──────────────────────────────────────────────────
+    // ── Build projects ─────────────────────────────────────────────────────
     match /build_projects/{id} {
       allow read: if isSignedIn();
-      allow create: if (isSignedIn()
-        && request.resource.data.uploadedBy == request.auth.uid
-        && request.resource.data.status == 'pending') || isAdmin();
+      allow create: if
+          (isSignedIn()
+            && request.resource.data.uploadedBy == request.auth.uid
+            && request.resource.data.status == 'pending')
+        || isAdmin();
       allow update: if isSignedIn() || isAdmin();
       allow delete: if isAdmin();
     }
     match /build_participations/{id} {
-      allow read: if (isSignedIn() && resource.data.uid == request.auth.uid) || isAdmin();
-      allow create: if isSignedIn() && request.resource.data.uid == request.auth.uid;
+      allow read: if
+        (isSignedIn() && resource.data.uid == request.auth.uid) || isAdmin();
+      allow create: if
+        isSignedIn() && request.resource.data.uid == request.auth.uid;
       allow update, delete: if isAdmin();
     }
     match /build_for_me_requests/{id} {
-      allow read: if (isSignedIn() && resource.data.uid == request.auth.uid) || isAdmin();
-      allow create: if isSignedIn() && request.resource.data.uid == request.auth.uid;
+      allow read: if
+        (isSignedIn() && resource.data.uid == request.auth.uid) || isAdmin();
+      allow create: if
+        isSignedIn() && request.resource.data.uid == request.auth.uid;
       allow update, delete: if isAdmin();
     }
 
-    // ── JV ──────────────────────────────────────────────────────────────
+    // ── Joint Ventures ─────────────────────────────────────────────────────
     match /jv_projects/{id} {
-      allow read: if (isSignedIn() && resource.data.uid == request.auth.uid) || isAdmin();
-      allow create: if isSignedIn() && request.resource.data.uid == request.auth.uid;
+      allow read: if
+        (isSignedIn() && resource.data.uid == request.auth.uid) || isAdmin();
+      allow create: if
+        isSignedIn() && request.resource.data.uid == request.auth.uid;
       allow update, delete: if isAdmin();
     }
 
-    // ── Lands ───────────────────────────────────────────────────────────
+    // ── Lands ──────────────────────────────────────────────────────────────
     match /lands/{id} {
       allow read: if isSignedIn();
       allow update: if isSignedIn() || isAdmin();
       allow create, delete: if isAdmin();
     }
     match /land_acquisitions/{id} {
-      allow read: if (isSignedIn() && resource.data.uid == request.auth.uid) || isAdmin();
-      allow create: if isSignedIn() && request.resource.data.uid == request.auth.uid;
+      allow read: if
+        (isSignedIn() && resource.data.uid == request.auth.uid) || isAdmin();
+      allow create: if
+        isSignedIn() && request.resource.data.uid == request.auth.uid;
       allow update, delete: if isAdmin();
     }
 
-    // ── Legacy plans ────────────────────────────────────────────────────
+    // ── Legacy plans ───────────────────────────────────────────────────────
     match /legacy_plans/{id} {
-      allow read: if (isSignedIn() && resource.data.uid == request.auth.uid) || isAdmin();
-      allow create: if isSignedIn() && request.resource.data.uid == request.auth.uid;
+      allow read: if
+        (isSignedIn() && resource.data.uid == request.auth.uid) || isAdmin();
+      allow create: if
+        isSignedIn() && request.resource.data.uid == request.auth.uid;
       allow update: if isSignedIn() || isAdmin();
       allow delete: if isAdmin();
     }
 
-    // ── Marketplace ─────────────────────────────────────────────────────
+    // ── Marketplace ────────────────────────────────────────────────────────
     match /vendors/{id} {
       allow read: if isSignedIn();
       allow write: if isAdmin();
@@ -187,29 +239,180 @@ service cloud.firestore {
       allow write: if isAdmin();
     }
     match /orders/{id} {
-      allow read: if (isSignedIn() && resource.data.uid == request.auth.uid) || isAdmin();
-      allow create: if isSignedIn() && request.resource.data.uid == request.auth.uid;
-      allow update, delete: if isAdmin();
+      allow read: if
+          (isSignedIn() && (
+            resource.data.uid == request.auth.uid ||
+            resource.data.vendorId == request.auth.uid
+          ))
+        || isAdmin();
+      allow create: if
+        isSignedIn() && request.resource.data.uid == request.auth.uid;
+      allow update: if
+          (isSignedIn() && resource.data.uid == request.auth.uid)
+        || isAdmin();
+      allow delete: if isAdmin();
     }
 
-    // ── Referrals & Sponsorships ────────────────────────────────────────
+    // ── Referrals / Sponsorships ───────────────────────────────────────────
     match /referrals/{id} {
-      allow read: if (isSignedIn() && resource.data.referrerUid == request.auth.uid) || isAdmin();
-      allow write: if isSignedIn() || isAdmin();
+      allow read: if
+        (isSignedIn() && (
+          resource.data.referrerUid == request.auth.uid ||
+          resource.data.referredUid == request.auth.uid
+        )) || isAdmin();
+      allow create: if isSignedIn();
+      allow update, delete: if isAdmin();
     }
     match /sponsorships/{id} {
-      allow read: if isSignedIn() && (
-        resource.data.sponsorUid == request.auth.uid
-        || resource.data.sponsoredUid == request.auth.uid
-      ) || isAdmin();
+      allow read: if
+        (isSignedIn() && resource.data.sponsorUid == request.auth.uid)
+        || isAdmin();
       allow create: if isSignedIn();
       allow update, delete: if isAdmin();
     }
 
-    // ── Config (read-only) ──────────────────────────────────────────────
-    match /config/{id} {
-      allow read: if true;
-      allow write: if isAdmin();
+    // ── Payment Verifications (Drop 3) ─────────────────────────────────────
+    // Users submit bank transfer receipts; admins review and credit wallet.
+    match /payment_verifications/{id} {
+      allow read: if
+        (isSignedIn() && resource.data.uid == request.auth.uid) || isAdmin();
+      allow create: if
+          isSignedIn()
+          && request.resource.data.uid == request.auth.uid
+          && request.resource.data.status == 'pending';
+      // Only admins can approve/reject (change status).
+      // Users cannot self-approve their own receipt.
+      allow update: if isAdmin();
+      allow delete: if false;
     }
+
+    // ── Support Threads (Drop 4) ───────────────────────────────────────────
+    // One thread per user at support_threads/{uid}.
+    match /support_threads/{uid} {
+      allow read: if
+          (isSignedIn() && request.auth.uid == uid)
+        || isAdmin();
+
+      allow create: if
+          isSignedIn()
+          && request.auth.uid == uid
+          && request.resource.data.uid == uid;
+
+      allow update: if
+          (isSignedIn()
+            && request.auth.uid == uid
+            && request.resource.data.diff(resource.data).affectedKeys()
+               .hasOnly(['lastMessageBody', 'lastMessageAt', 'lastMessageSender',
+                         'adminUnreadCount', 'userUnreadCount', 'status',
+                         'userFullName', 'userEmail']))
+        || isAdmin();
+
+      allow delete: if false;
+
+      // Messages subcollection — immutable once written
+      match /messages/{msgId} {
+        allow read: if
+            (isSignedIn() && request.auth.uid == uid)
+          || isAdmin();
+
+        allow create: if
+            isSignedIn() && (
+              // User sending to their own thread
+              (request.auth.uid == uid && request.resource.data.sender == 'user') ||
+              // Admin sending to any thread
+              (isAdmin() && request.resource.data.sender == 'admin')
+            );
+
+        // Messages are immutable — no edits, no deletes (audit trail)
+        allow update, delete: if false;
+      }
+    }
+
+    // ── Notifications (Drop 1) ─────────────────────────────────────────────
+    // Cloud Functions write to this collection via admin SDK (bypasses rules).
+    // Users can read their own feed, mark items read, and delete them.
+    match /notifications/{uid}/items/{itemId} {
+      allow read: if
+        isSignedIn() && request.auth.uid == uid;
+
+      // Only allow client-side create for the welcome notification
+      allow create: if
+          isSignedIn()
+          && request.auth.uid == uid
+          && request.resource.data.category == 'welcome';
+
+      // Users can only toggle the `read` field
+      allow update: if
+          isSignedIn()
+          && request.auth.uid == uid
+          && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['read']);
+
+      allow delete: if
+        isSignedIn() && request.auth.uid == uid;
+    }
+
+    // ── Notification Broadcasts (admin dashboard) ──────────────────────────
+    // Admin dashboard queues broadcasts here; Cloud Functions process them.
+    match /notification_broadcasts/{id} {
+      allow read: if isAdmin();
+      allow create: if isAdmin();
+      allow update, delete: if false;
+    }
+
+    // ── Rent-to-Own Applications ───────────────────────────────────────────
+    match /rent_to_own_applications/{id} {
+      allow read: if
+          (isSignedIn() && resource.data.uid == request.auth.uid)
+        || isAdmin();
+
+      // User creates their own application with status='pending'.
+      // The RtoRepository atomic transaction handles wallet debit + property
+      // reservation simultaneously. Rules can't validate cross-doc atomics,
+      // so we validate the application doc fields only.
+      allow create: if
+          isSignedIn()
+          && request.resource.data.uid == request.auth.uid
+          && request.resource.data.status == 'pending'
+          && request.resource.data.propertyId is string
+          && request.resource.data.tenureYears in [5, 10]
+          && request.resource.data.deposit is number
+          && request.resource.data.deposit > 0;
+
+      // Admins can change any field (approve, reject, forfeit).
+      // Buyers can update schedule + status during active yearly payments.
+      allow update: if
+          isAdmin()
+        || (isSignedIn()
+              && resource.data.uid == request.auth.uid
+              && resource.data.status == 'active'
+              && request.resource.data.status in ['active', 'completed']);
+
+      allow delete: if false;
+    }
+
+    // ── Mortgage Applications ──────────────────────────────────────────────
+    match /mortgage_applications/{id} {
+      allow read: if
+          (isSignedIn() && resource.data.uid == request.auth.uid)
+        || isAdmin();
+
+      // User creates their own application at submitted stage.
+      allow create: if
+          isSignedIn()
+          && request.resource.data.uid == request.auth.uid
+          && request.resource.data.currentStage == 'submitted'
+          && request.resource.data.propertyId is string
+          && request.resource.data.lenderName is string;
+
+      // Admins can advance stages. Users can only cancel their own.
+      allow update: if
+          isAdmin()
+        || (isSignedIn()
+              && resource.data.uid == request.auth.uid
+              && request.resource.data.currentStage == 'cancelled');
+
+      allow delete: if false;
+    }
+
   }
 }

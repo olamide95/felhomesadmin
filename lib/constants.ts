@@ -1,59 +1,52 @@
-// Mirror the paths defined in the Flutter app so we stay in sync.
 export const Paths = {
-  admins: "admins",
-  users: "users",
-  wallets: "wallets",
-  transactions: "transactions",
-  bankAccounts: "bank_accounts",
-  withdrawals: "withdrawal_requests",
-  properties: "properties",
-  inspectionRequests: "inspection_requests",
-  leaseRequests: "lease_requests",
-  rentalRequests: "rental_requests",
-  managementRequests: "management_requests",
-  propertyPurchases: "property_purchases",
-  iouApplications: "iou_applications",
-  investments: "investments",
-  investmentParticipations: "investment_participations",
-  buildProjects: "build_projects",
-  buildParticipations: "build_participations",
-  buildForMeRequests: "build_for_me_requests",
-  jvProjects: "jv_projects",
-  lands: "lands",
-  landAcquisitions: "land_acquisitions",
-  legacyPlans: "legacy_plans",
-  vendors: "vendors",
-  products: "products",
-  orders: "orders",
-  referrals: "referrals",
-  sponsorships: "sponsorships",
+  users: 'users',
+  admins: 'admins',
+  wallets: 'wallets',
+  transactions: 'transactions',
+  properties: 'properties',
+  withdrawals: 'withdrawal_requests',
+  iouApplications: 'iou_applications',
+  investments: 'investments',
+  investmentParticipations: 'investment_participations',
+  buildProjects: 'build_projects',
+  jvProjects: 'jv_projects',
+  lands: 'lands',
+  vendors: 'vendors',
+  products: 'products',
+  orders: 'orders',
+  paymentVerifications: 'payment_verifications',
+  supportThreads: 'support_threads',
+  notifications: 'notifications',
+  rentToOwnApplications: 'rent_to_own_applications',
+  mortgageApplications: 'mortgage_applications',
+  referrals: 'referrals',
+  config: 'config',
 } as const;
 
-export const PLATFORM_WALLET_UID = "_platform";
-
-export const Business = {
-  registrationFee: 10000,
-  sponsorCommission: 3000,
-  propertyCommissionPercent: 0.15,
-  felhomesShareOfProperty: 0.1,
-  referrerShareOfProperty: 0.05,
-  iouMonthlyRepaymentPercent: 5,
-  iouAnnualRepaymentPercent: 60,
-  iouLoanMultiplierYears: 3,
-} as const;
-
-export function formatNaira(n: number | undefined | null): string {
-  const v = typeof n === "number" ? n : 0;
-  return new Intl.NumberFormat("en-NG", {
-    style: "currency",
-    currency: "NGN",
-    maximumFractionDigits: 0,
-  }).format(v);
+export function formatNaira(amount: number | undefined | null): string {
+  const v = typeof amount === 'number' ? amount : 0;
+  return `₦${v.toLocaleString('en-NG', { minimumFractionDigits: 0, maximumFractionDigits: 0 })}`;
 }
 
-export function formatCompactNaira(n: number | undefined | null): string {
-  const v = typeof n === "number" ? n : 0;
-  if (Math.abs(v) >= 1_000_000) return `₦${(v / 1_000_000).toFixed(1)}M`;
-  if (Math.abs(v) >= 1_000) return `₦${(v / 1_000).toFixed(1)}k`;
-  return `₦${v.toFixed(0)}`;
+export function formatCompactNaira(amount: number | undefined | null): string {
+  const v = typeof amount === 'number' ? amount : 0;
+  if (v >= 1_000_000_000) return `₦${(v / 1_000_000_000).toFixed(1)}B`;
+  if (v >= 1_000_000) return `₦${(v / 1_000_000).toFixed(1)}M`;
+  if (v >= 1_000) return `₦${(v / 1_000).toFixed(0)}K`;
+  return formatNaira(v);
+}
+
+export function formatDate(ts: { seconds: number } | null | undefined): string {
+  if (!ts) return '—';
+  return new Date(ts.seconds * 1000).toLocaleDateString('en-NG', {
+    day: 'numeric', month: 'short', year: 'numeric',
+  });
+}
+
+export function formatDateTime(ts: { seconds: number } | null | undefined): string {
+  if (!ts) return '—';
+  return new Date(ts.seconds * 1000).toLocaleString('en-NG', {
+    day: 'numeric', month: 'short', year: 'numeric',
+    hour: '2-digit', minute: '2-digit',
+  });
 }

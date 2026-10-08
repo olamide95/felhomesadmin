@@ -1,130 +1,165 @@
-"use client";
+'use client';
 
-import { useMemo, useState } from "react";
-import Link from "next/link";
-import { orderBy } from "firebase/firestore";
-import { Users, Search, ExternalLink, Loader2 } from "lucide-react";
-import { Paths } from "@/lib/constants";
-import { formatDate } from "@/lib/firestore-helpers";
-import { useFirestoreQuery } from "@/hooks/use-firestore-query";
-import { PageHeader } from "@/components/page-header";
-import { EmptyState } from "@/components/empty-state";
-import {
-  Table,
-  TableBody,
-  TableCell,
-  TableHead,
-  TableHeader,
-  TableRow,
-} from "@/components/ui/table";
-import { Card, CardContent } from "@/components/ui/card";
-import { Input } from "@/components/ui/input";
-import { Badge } from "@/components/ui/badge";
+import { useEffect, useMemo, useState } from 'react';
+import Link from 'next/link';
+import { collection, onSnapshot, orderBy, query, doc, updateDoc, serverTimestamp } from 'firebase/firestore';
+import { Users, Search, Loader2, ShieldOff } from 'lucide-react';
+import { toast } from 'sonner';
+import { db } from '@/lib/firebase';
+import { Paths, formatDate, formatCompactNaira } from '@/lib/constants';
+import { PageHeader } from '@/components/shared/page-header';
+import { EmptyState } from '@/components/shared/empty-state';
+import { StatusBadge } from '@/components/shared/status-badge';
+import { ValidationWarningDialog } from '@/components/shared/validation-warning-dialog';
+import { Card, CardContent } from '@/components/ui/card';
+import { Input } from '@/components/ui/input';
+import { Button } from '@/components/ui/button';
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
+import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table';
+import { useAuth } from '@/lib/auth';
 
-type UserDoc = {
+interface AppUser {
   id: string;
   fullName?: string;
   email?: string;
   phone?: string;
-  referralCode?: string;
-  sponsorCode?: string;
-  kycCompleted?: boolean;
   registrationFeePaid?: boolean;
+  accountActive?: boolean;
   suspended?: boolean;
-  createdAt?: any;
-};
+  sponsorUid?: string;
+  sponsorCode?: string;
+  createdAt?: { seconds: number };
+}
 
 export default function UsersPage() {
-  const [q, setQ] = useState("");
-  const { docs, loading } = useFirestoreQuery<UserDoc>(
-    Paths.users,
-    [orderBy("createdAt", "desc")]
-  );
+  const { permissions } = useAuth();
+  const [users, setUsers] = useState<AppUser[]>([]);
+  const [loading, setLoading] = useState(true);
+  const [search, setSearch] = useState('');
+  const [filter, setFilter] = useState('all');
+  const [suspendTarget, setSuspendTarget] = useState<AppUser | null>(null);
+  const [working, setWorking] = useState(false);
+
+  useEffect(() => {
+    const unsub = onSnapshot(
+      query(collection(db, Paths.users), orderBy('createdAt', 'desc')),
+      snap => {
+        setUsers(snap.docs.map(d => ({ id: d.id, ...d.data() } as AppUser)));
+        setLoading(false);
+      },
+      err => { toast.error(err.message); setLoading(false); }
+    );
+    return () => unsub();
+  }, []);
 
   const filtered = useMemo(() => {
-    const term = q.trim().toLowerCase();
-    if (!term) return docs;
-    return docs.filter(
-      (u) =>
-        u.fullName?.toLowerCase().includes(term) ||
-        u.email?.toLowerCase().includes(term) ||
-        u.phone?.toLowerCase().includes(term) ||
-        u.referralCode?.toLowerCase().includes(term) ||
-        u.id.toLowerCase().includes(term)
-    );
-  }, [docs, q]);
+    let list = users;
+    if (filter === 'paid') list = list.filter(u => u.registrationFeePaid);
+    if (filter === 'unpaid') list = list.filter(u => !u.registrationFeePaid);
+    if (filter === 'suspended') list = list.filter(u => u.suspended);
+    if (search.trim()) {
+      const q = search.toLowerCase();
+      list = list.filter(u =>
+        [u.fullName, u.email, u.phone, u.id]
+          .filter(Boolean).some(v => String(v).toLowerCase().includes(q))
+      );
+    }
+    return list;
+  }, [users, search, filter]);
+
+  async function toggleSuspend() {
+    if (!suspendTarget) return;
+    setWorking(true);
+    try {
+      const nowSuspended = !suspendTarget.suspended;
+      await updateDoc(doc(db, Paths.users, suspendTarget.id), {
+        suspended: nowSuspended,
+        accountActive: !nowSuspended,
+        updatedAt: serverTimestamp(),
+      });
+      toast.success(nowSuspended ? 'User suspended' : 'User reinstated');
+      setSuspendTarget(null);
+    } catch (e: any) {
+      toast.error(e.message ?? 'Failed');
+    } finally {
+      setWorking(false);
+    }
+  }
 
   return (
-    <div>
+    <div className="space-y-6">
       <PageHeader
         title="Users"
-        description={`${docs.length} registered`}
+        description={`${users.length.toLocaleString()} registered account${users.length !== 1 ? 's' : ''}`}
       />
+
+      <div className="flex flex-col gap-3 sm:flex-row">
+        <div className="relative flex-1">
+          <Search className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-slate-400" />
+          <Input placeholder="Search by name, email or phone…" value={search}
+            onChange={e => setSearch(e.target.value)} className="pl-9" />
+        </div>
+        <Select value={filter} onValueChange={setFilter}>
+          <SelectTrigger className="w-full sm:w-[180px]"><SelectValue /></SelectTrigger>
+          <SelectContent>
+            <SelectItem value="all">All users</SelectItem>
+            <SelectItem value="paid">Reg fee paid</SelectItem>
+            <SelectItem value="unpaid">Fee pending</SelectItem>
+            <SelectItem value="suspended">Suspended</SelectItem>
+          </SelectContent>
+        </Select>
+      </div>
 
       <Card>
         <CardContent className="p-0">
-          <div className="border-b p-3">
-            <div className="relative">
-              <Search className="absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-muted-foreground" />
-              <Input
-                placeholder="Search by name, email, phone, referral code, or UID…"
-                value={q}
-                onChange={(e) => setQ(e.target.value)}
-                className="pl-9"
-              />
-            </div>
-          </div>
           {loading ? (
-            <div className="flex justify-center p-12">
-              <Loader2 className="h-6 w-6 animate-spin text-muted-foreground" />
-            </div>
+            <div className="flex justify-center py-16"><Loader2 className="h-5 w-5 animate-spin text-slate-400" /></div>
           ) : filtered.length === 0 ? (
-            <div className="p-6">
-              <EmptyState
-                icon={Users}
-                title="No users"
-                message={q ? "Try a different search term." : "No users have registered yet."}
-              />
-            </div>
+            <div className="p-8"><EmptyState icon={Users} title="No users found" message="Try adjusting your search or filter." /></div>
           ) : (
             <Table>
               <TableHeader>
                 <TableRow>
-                  <TableHead>Name</TableHead>
-                  <TableHead>Email</TableHead>
+                  <TableHead>User</TableHead>
                   <TableHead>Phone</TableHead>
-                  <TableHead>Referral code</TableHead>
-                  <TableHead>KYC</TableHead>
                   <TableHead>Registered</TableHead>
-                  <TableHead className="text-right">Open</TableHead>
+                  <TableHead>Reg fee</TableHead>
+                  <TableHead>Status</TableHead>
+                  {permissions?.canSuspendUsers && <TableHead className="text-right">Actions</TableHead>}
                 </TableRow>
               </TableHeader>
               <TableBody>
-                {filtered.map((u) => (
-                  <TableRow key={u.id}>
+                {filtered.map(u => (
+                  <TableRow key={u.id} className="hover:bg-muted/40">
                     <TableCell>
-                      <div className="font-medium">{u.fullName ?? "—"}</div>
-                      {u.suspended && <Badge variant="destructive" className="mt-1">Suspended</Badge>}
+                      <div className="flex items-center gap-2.5">
+                        <div className="h-8 w-8 rounded-full bg-[#C89B3C]/10 flex items-center justify-center text-xs font-bold text-[#C89B3C] shrink-0">
+                          {(u.fullName ?? u.email ?? 'U').slice(0, 2).toUpperCase()}
+                        </div>
+                        <div>
+                          <p className="text-sm font-semibold text-slate-800">{u.fullName ?? '—'}</p>
+                          <p className="text-xs text-slate-400">{u.email}</p>
+                        </div>
+                      </div>
                     </TableCell>
-                    <TableCell>{u.email ?? "—"}</TableCell>
-                    <TableCell>{u.phone ?? "—"}</TableCell>
-                    <TableCell className="font-mono text-xs">{u.referralCode ?? "—"}</TableCell>
+                    <TableCell className="text-sm text-slate-600">{u.phone ?? '—'}</TableCell>
+                    <TableCell className="text-xs text-slate-500">{formatDate(u.createdAt)}</TableCell>
                     <TableCell>
-                      {u.kycCompleted ? (
-                        <Badge variant="success">Verified</Badge>
-                      ) : (
-                        <Badge variant="warning">Pending</Badge>
-                      )}
+                      <StatusBadge status={u.registrationFeePaid ? 'paid' : 'pending'} />
                     </TableCell>
-                    <TableCell className="text-sm">{formatDate(u.createdAt)}</TableCell>
-                    <TableCell className="text-right">
-                      <Link
-                        href={`/admin/users/${u.id}`}
-                        className="inline-flex items-center gap-1 text-sm font-medium text-primary hover:underline"
-                      >
-                        View <ExternalLink className="h-3 w-3" />
-                      </Link>
+                    <TableCell>
+                      <StatusBadge status={u.suspended ? 'suspended' : 'active'} />
                     </TableCell>
+                    {permissions?.canSuspendUsers && (
+                      <TableCell className="text-right">
+                        <Button variant="ghost" size="sm"
+                          className={u.suspended ? 'text-green-600 hover:text-green-700' : 'text-red-500 hover:text-red-700'}
+                          onClick={() => setSuspendTarget(u)}>
+                          <ShieldOff className="h-3.5 w-3.5 mr-1" />
+                          {u.suspended ? 'Reinstate' : 'Suspend'}
+                        </Button>
+                      </TableCell>
+                    )}
                   </TableRow>
                 ))}
               </TableBody>
@@ -132,6 +167,19 @@ export default function UsersPage() {
           )}
         </CardContent>
       </Card>
+
+      <ValidationWarningDialog
+        open={!!suspendTarget}
+        onOpenChange={o => { if (!o) setSuspendTarget(null); }}
+        title={suspendTarget?.suspended ? 'Reinstate user?' : 'Suspend user?'}
+        description={suspendTarget?.suspended
+          ? `${suspendTarget?.fullName ?? suspendTarget?.email} will regain access to the app.`
+          : `${suspendTarget?.fullName ?? suspendTarget?.email} will lose all access. They cannot log in or transact.`}
+        confirmLabel={suspendTarget?.suspended ? 'Yes, reinstate' : 'Yes, suspend'}
+        confirmVariant={suspendTarget?.suspended ? 'default' : 'destructive'}
+        onConfirm={toggleSuspend}
+        loading={working}
+      />
     </div>
   );
 }

@@ -1,47 +1,39 @@
-"use client";
+'use client';
 
-import { useEffect, useState } from "react";
+import { useEffect, useState } from 'react';
 import {
-  collection,
-  onSnapshot,
-  query,
-  type DocumentData,
-  type Query,
+  collection, onSnapshot, query,
   type QueryConstraint,
-} from "firebase/firestore";
-import { db } from "@/lib/firebase";
+} from 'firebase/firestore';
+import { db } from '@/lib/firebase';
 
-export type FirestoreDoc<T = DocumentData> = { id: string } & T;
-
-export function useFirestoreQuery<T = DocumentData>(
+export function useFirestoreQuery<T extends { id: string }>(
   path: string,
   constraints: QueryConstraint[] = [],
-  deps: any[] = []
+  deps: unknown[] = [],
 ) {
-  const [docs, setDocs] = useState<FirestoreDoc<T>[]>([]);
+  const [docs, setDocs] = useState<T[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
 
   useEffect(() => {
     setLoading(true);
     setError(null);
-    const q: Query = constraints.length
-      ? query(collection(db, path), ...constraints)
-      : collection(db, path);
+    const q = query(collection(db, path), ...constraints);
     const unsub = onSnapshot(
       q,
       (snap) => {
-        setDocs(snap.docs.map((d) => ({ id: d.id, ...(d.data() as T) })));
+        setDocs(snap.docs.map((d) => ({ id: d.id, ...d.data() } as T)));
         setLoading(false);
       },
       (err) => {
         setError(err.message);
         setLoading(false);
-      }
+      },
     );
     return () => unsub();
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, deps);
+  }, [path, ...deps]);
 
   return { docs, loading, error };
 }

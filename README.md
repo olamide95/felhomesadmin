@@ -1,136 +1,147 @@
-# Felhomes Admin
+# Felhomes Admin Dashboard v2
 
-Next.js admin console for the Felhomes platform. Connects to the same Firebase project as the mobile app.
+Complete rebuild with role-based access, live charts, all features, and the Felhomes logo.
+
+## What's in this drop
+
+### App pages (24 total)
+| Route | Page | Key features |
+|-------|------|-------------|
+| `/admin` | Dashboard | Platform balance, all stats, charts, pending alerts, recent activity |
+| `/admin/login` | Login | Dark branded login with logo |
+| `/admin/reports` | Reports | User growth, tx volume, property pipeline, RTO pipeline charts |
+| `/admin/properties` | Properties | Approve/reject with reason, image preview, category filter |
+| `/admin/withdrawals` | Withdrawals | Mark paid with bank ref, reject & auto-refund, copy account number |
+| `/admin/payment-verifications` | Receipts | View receipt image, approve & credit wallet, reject with reason |
+| `/admin/iou` | IOU | Approve & auto-disburse to wallet, reject, repayment schedule |
+| `/admin/rent-to-own` | RTO listing | Filter by status, pending count badge |
+| `/admin/rent-to-own/[id]` | RTO detail | Approve (pays referral), reject (refunds deposit), forfeit |
+| `/admin/mortgages` | Mortgages | Stage filter, in-progress count |
+| `/admin/mortgages/[id]` | Mortgage detail | Stage advance + note, auto-refund on bankDeclined |
+| `/admin/users` | Users | Search, suspend/reinstate, registration fee status |
+| `/admin/support` | Support chat | Two-pane inbox, real-time messages, keyboard send |
+| `/admin/notifications` | Notifications | Compose + send push to all/filtered users, broadcast history |
+| `/admin/investments` | Investments | Progress bars, return rates, participant counts |
+| `/admin/build` | Build projects | Build With Me / Build For Me approval |
+| `/admin/jv` | Joint ventures | Director escalation warning, approve flow |
+| `/admin/land` | Land plots | Approve/reject, image preview |
+| `/admin/vendors` | Vendors | Add/edit vendors, suspend/activate |
+| `/admin/products` | Products | Manage marketplace products |
+| `/admin/roles` | Roles & Admins | Add/remove staff, change roles (Super Admin only) |
+| `/admin/settings` | Settings | All business rules (Super Admin only) |
+
+### Shared components
+- `StatusBadge` — colour-coded badge for every status value across the platform
+- `PageHeader` — consistent title + description + optional action button
+- `EmptyState` — illustrated empty states
+- `ValidationWarningDialog` — confirmation dialog before irreversible actions
+
+### Role-based permissions
+Four roles with fine-grained permissions:
+- **Super Admin** — everything including roles and settings
+- **Admin** — all operations except roles and settings
+- **Moderator** — approve/reject content and payments; no user management
+- **Viewer** — read-only
 
 ---
 
-## Setup (5 steps)
+## Setup
 
-### 1. Install
-
+### 1. Install dependencies
 ```bash
-cd felhomes-admin
 npm install
 ```
 
-### 2. Deploy Firestore rules
-
-`firestore.rules` adds an `isAdmin()` helper. Copy it over your existing rules in the same Firebase project as the mobile app, then:
-
+### 2. Add shadcn/ui components (if not already installed)
 ```bash
-firebase deploy --only firestore:rules
+npx shadcn@latest add alert-dialog dialog select label input textarea button card badge table
 ```
 
-### 3. Create your first admin
+### 3. Add your Firebase config
+Create or update `lib/firebase.ts`:
+```ts
+import { initializeApp } from 'firebase/app';
+import { getAuth } from 'firebase/auth';
+import { getFirestore } from 'firebase/firestore';
 
-Firebase Console → **Authentication** → **Add user** (email + strong password). Copy the UID.
+const firebaseConfig = {
+  // your config here
+};
 
-Firestore Console → start collection `admins` (no `__` in the ID, just `admins`) → add document with:
-- Document ID: **paste the UID**
-- Field: `addedAt` (timestamp, now)
+const app = initializeApp(firebaseConfig);
+export const auth = getAuth(app);
+export const db = getFirestore(app);
+```
 
-### 4. Run
+### 4. Copy the logo
+Put `logo.png` in your `public/` folder.
 
+### 5. Wrap your app with AuthProvider
+In `app/layout.tsx`:
+```tsx
+import { AuthProvider } from '@/lib/auth';
+export default function RootLayout({ children }) {
+  return (
+    <html>
+      <body>
+        <AuthProvider>
+          {children}
+        </AuthProvider>
+      </body>
+    </html>
+  );
+}
+```
+
+### 6. Add Sonner toast provider
+In `app/layout.tsx`:
+```tsx
+import { Toaster } from 'sonner';
+// inside body:
+<Toaster position="top-right" richColors />
+```
+
+### 7. Run
 ```bash
 npm run dev
 ```
 
-Open http://localhost:3000 → login → dashboard.
-
-### 5. Deploy to Vercel
-
-```bash
-npm i -g vercel
-vercel
-```
-
 ---
 
-## What's in the console
+## Firestore: add first Super Admin
 
-| Section | Purpose |
-|---|---|
-| **Dashboard** | Live metrics + recent transactions feed |
-| **Properties** | Approve / reject user listings (4 status tabs) |
-| **Withdrawals** | Process payout requests atomically (debit pendingWithdrawals + log audit txn) |
-| **IOU Applications** | Approve & fund (credit user wallet) or reject |
-| **Investments** | Create / edit / delete investment projects |
-| **Build Projects** | Two tabs: review fundable projects + review build-for-me requests |
-| **Joint Ventures** | Review JV land proposals (pending → under review → approved → in progress → completed) |
-| **Land Plots** | Create / edit / delete plots for Site & Services |
-| **Vendors** | Create / edit vendors, toggle featured, activate / deactivate |
-| **Products** | Create / edit products linked to vendors |
-| **Users** | List + search; per-user view shows wallet, transactions, suspend, manual credit/debit |
-
----
-
-## Tech
-
-- Next.js 14 (app router) + TypeScript
-- Tailwind CSS + shadcn/ui (manual install, no CLI dependency)
-- Firebase Web SDK (Auth + Firestore + Storage)
-- Sonner toasts, Lucide icons
-- Client-side everything; no server actions
-
----
-
-## Money movement
-
-All wallet mutations use Firestore `runTransaction()` for atomicity:
-
-- **Withdrawal approval**: decreases `wallets.{uid}.pendingWithdrawals`, marks request `paid`, logs `transactions/{...}` audit row with the bank-transfer reference you provide.
-- **Withdrawal rejection**: refunds the amount from `pendingWithdrawals` back to `balance`, marks request `rejected`, logs reversal txn.
-- **IOU approval**: credits `wallets.{uid}.balance` by `iouAmount`, marks application `active`, logs disbursement txn.
-- **Manual wallet adjust** (in user details): credits or debits with mandatory audit note, logged as `adminAdjustment`.
-
-For production, move these to Cloud Functions and lock down client write rules. Current rules trust authenticated admins to do the right thing.
-
----
-
-## Adding / removing admins
-
-**Add:** repeat the auth user + Firestore doc steps above.
-
-**Remove:** delete the doc from `admins/{uid}` in Firestore Console. Within seconds, that user's next request to `/admin` will be denied. If they're currently signed in, also Disable the user in Firebase Auth → Users → ⋮ → Disable.
-
-No in-app UI for managing admins by design — admin-admin is the most dangerous operation in the system.
-
----
-
-## Known things
-
-- **Indexes**: some queries will fail the first time with "this query requires an index" — click the link Firebase logs in the browser console to create it. Common ones are already in your Flutter app's `firestore.indexes.json`.
-- **`useFirestoreQuery` deps**: be careful when changing tabs / filters — the hook re-subscribes when the `deps` array changes. Each page passes the right deps.
-- **Image uploads** go to `gs://<bucket>/admin_uploads/<folder>/<timestamp>_<name>`. Make sure Storage rules allow admin writes to this path. The mobile app's storage rules at `/{folder}/{uid}/...` won't match — you'll need to add a rule for `admin_uploads`:
-
-```
-match /admin_uploads/{folder}/{file=**} {
-  allow read: if true;
-  allow write: if request.auth != null
-    && exists(/databases/(default)/documents/admins/$(request.auth.uid));
+In Firebase Console, create a document at `admins/{your-firebase-uid}`:
+```json
+{
+  "email": "you@felhomes.com",
+  "displayName": "Your Name",
+  "role": "super_admin",
+  "createdAt": "<server timestamp>"
 }
 ```
 
-Storage rules are configured in Firebase Console → Storage → Rules.
+Then log in. The role management page lets you add all other staff from there.
 
 ---
 
-## Routes
+## Files not included (copy from your existing project)
+- `lib/firebase.ts` — your Firebase config
+- `lib/utils.ts` — shadcn `cn()` helper
+- `components/ui/*` — shadcn/ui components
+- `tailwind.config.ts` / `globals.css` — your Tailwind setup
+- `app/layout.tsx` (root) — needs AuthProvider + Toaster added
 
-```
-/                                  → redirects to /admin
-/admin                             → dashboard
-/admin/login                       → login form
-/admin/properties                  → property moderation
-/admin/withdrawals                 → withdrawal queue
-/admin/iou                         → IOU applications
-/admin/investments                 → investment projects CRUD
-/admin/build                       → build projects + build-for-me review
-/admin/jv                          → JV proposals review
-/admin/land                        → land plots CRUD
-/admin/vendors                     → vendors CRUD
-/admin/products                    → products CRUD
-/admin/users                       → users list
-/admin/users/[uid]                 → user detail with wallet + transactions
-```
-# felhomesadmin
+---
+
+## Changes from v1
+- Full logo integration (top of sidebar + login page + loading screen)
+- Role-based permissions system with 4 tiers
+- All-new main dashboard with 12 stat cards, 4 charts, pending alerts banner, platform balance
+- Reports page with user growth, tx volume, property pipeline, RTO pipeline charts
+- Notifications page — compose and send push notifications
+- Settings page — all business rules editable by Super Admin
+- Support chat fully rebuilt as two-pane inbox
+- Roles & Admins management page
+- All existing pages ported with consistent styling
+- Mobile-responsive sidebar with hamburger menu
+- Dark branded login page
